@@ -290,99 +290,76 @@ def analyze_video():
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # ── Step 1: Get contact time from user (manual selection) ──
-        contact_time = request.form.get('contact_time', None)
-        if contact_time is not None:
-            contact_frame_num = int(float(contact_time) * fps)
-            contact_frame_num = max(0, min(total_frames - 1, contact_frame_num))
-        else:
-            contact_frame_num = total_frames // 2
+        # ── Step 1: Scan all frames — track ankle velocity + knee angle ──
+        ankle_pos  = {}   # frame -> (x, y)
+        knee_angle = {}   # frame -> min_knee_angle
 
-        prep_frame_num   = max(0, contact_frame_num - int(fps * 0.4))
-        follow_frame_num = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
-
+        step = max(1, round(fps / 15))
+        with mp_pose.Pose(static_image_mode=False, model_complexity=1,
+                          min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
+            fn = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if fn % step == 0:
+                    h, w = frame.shape[:2]
+                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    r = pose.process(img_rgb)
+                    if r.pose_landmarks:
+                        lm = r.pose_landmarks.landmark
+                        # Ankle tracking
+                        ankles = [(lm[i].x*w, lm[i].y*h, lm[i].visibility) for i in [27,28] if lm[i].visibility > 0.2]
+                        if ankles:
+                            ax, ay, _ = max(ankles, key=lambda a: a[2])
+                            ankle_pos[fn] = (ax, ay)
+                        # Knee angles
+                        def p(i): return [lm[i].x, lm[i].y]
+                        rk = calculate_angle(p(24), p(26), p(28))
+                        lk = calculate_angle(p(23), p(25), p(27))
+                        knee_angle[fn] = min(rk, lk)
+                fn += 1
         cap.release()
 
-        # ── Step 2: (Gemini disabled - using manual contact + fixed offsets) ──
+        # ── Step 2: Find contact = first ankle velocity peak in first 85% of video ──
+        contact_frame_num = int(total_frames * 0.5)
+        search_limit = int(total_frames * 0.85)
 
-        if False and gemini_client:  # disabled
-            try:
-                duration = total_frames / fps
-                # Upload video to Gemini Files API
-                with open(tmp_path, 'rb') as f:
-                    video_file = gemini_client.files.upload(
-                        file=f,
-                        config=genai_types.UploadFileConfig(mime_type='video/mp4')
-                    )
-                # Wait for processing (max 40s)
-                for _ in range(20):
-                    video_file = gemini_client.files.get(name=video_file.name)
-                    if video_file.state.name == 'ACTIVE':
+        if len(ankle_pos) >= 3:
+            frames = sorted(ankle_pos.keys())
+            speeds = {}
+            for i in range(1, len(frames)-1):
+                fp, fc, fn2 = frames[i-1], frames[i], frames[i+1]
+                if fc > search_limit:
+                    break
+                px, py = ankle_pos[fp]; cx, cy = ankle_pos[fc]; nx, ny = ankle_pos[fn2]
+                speeds[fc] = (np.hypot(cx-px, cy-py) + np.hypot(nx-cx, ny-cy)) / 2
+
+            if speeds:
+                max_spd = max(speeds.values())
+                threshold = max_spd * 0.65
+                speed_frames = sorted(speeds.keys())
+                for i in range(1, len(speed_frames)-1):
+                    fp, fc, fn2 = speed_frames[i-1], speed_frames[i], speed_frames[i+1]
+                    if speeds[fc] >= threshold and speeds[fc] > speeds.get(fp,0) and speeds[fc] > speeds.get(fn2,0):
+                        contact_frame_num = fc
                         break
-                    time.sleep(2)
+                else:
+                    contact_frame_num = max(speeds, key=speeds.get)
 
-                if video_file.state.name == 'ACTIVE':
-                    prompt = (
-                        f"This is a football/soccer kick video, duration {duration:.1f} seconds. "
-                        "Find the EXACT timestamp (in seconds) when the player's foot makes contact with the ball. "
-                        "This is the moment of impact - when foot touches ball. "
-                        "Reply with ONLY this format: CONTACT=<seconds as decimal number>"
-                    )
-                    response = gemini_client.models.generate_content(
-                        model='gemini-2.0-flash',
-                        contents=[
-                            genai_types.Part.from_uri(file_uri=video_file.uri, mime_type='video/mp4'),
-                            prompt
-                        ]
-                    )
-                    text = response.text
-                    cm = re.search(r'CONTACT=([\d.]+)', text)
-                    if cm:
-                        contact_frame_num = min(total_frames-1, max(0, int(float(cm.group(1)) * fps)))
+        # ── Step 3: Find prep = max knee flexion in [-1.5s, -0.1s] before contact ──
+        prep_start = max(0, contact_frame_num - int(fps * 1.5))
+        prep_end   = max(0, contact_frame_num - int(fps * 0.1))
+        prep_candidates = {f: a for f, a in knee_angle.items() if prep_start <= f <= prep_end}
+        prep_frame_num = min(prep_candidates, key=prep_candidates.get) if prep_candidates else max(0, contact_frame_num - int(fps*0.5))
 
-                    # Use MediaPipe biomechanics to find prep & follow around contact
-                    prep_window_start  = max(0, contact_frame_num - int(fps * 1.5))
-                    prep_window_end    = max(0, contact_frame_num - int(fps * 0.1))
-                    follow_window_start = min(total_frames-1, contact_frame_num + int(fps * 0.1))
-                    follow_window_end   = min(total_frames-1, contact_frame_num + int(fps * 1.0))
+        # ── Step 4: Find follow = max knee extension in [+0.1s, +0.8s] after contact ──
+        follow_start = min(total_frames-1, contact_frame_num + int(fps * 0.1))
+        follow_end   = min(total_frames-1, contact_frame_num + int(fps * 0.8))
+        follow_candidates = {f: a for f, a in knee_angle.items() if follow_start <= f <= follow_end}
+        follow_frame_num = max(follow_candidates, key=follow_candidates.get) if follow_candidates else min(total_frames-1, contact_frame_num + int(fps*0.4))
 
-                    step = max(1, round(fps / 15))
-                    knee_data = {}
-                    cap2 = cv2.VideoCapture(tmp_path)
-                    with mp_pose.Pose(static_image_mode=False, model_complexity=1,
-                                      min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose2:
-                        cap2.set(cv2.CAP_PROP_POS_FRAMES, prep_window_start)
-                        fn = prep_window_start
-                        while fn <= follow_window_end:
-                            ret2, fr = cap2.read()
-                            if not ret2:
-                                break
-                            if fn % step == 0:
-                                img_rgb2 = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
-                                res2 = pose2.process(img_rgb2)
-                                if res2.pose_landmarks:
-                                    lm2 = res2.pose_landmarks.landmark
-                                    def p2(i): return [lm2[i].x, lm2[i].y]
-                                    rk = calculate_angle(p2(24), p2(26), p2(28))
-                                    lk = calculate_angle(p2(23), p2(25), p2(27))
-                                    knee_data[fn] = min(rk, lk)
-                            fn += 1
-                    cap2.release()
-
-                    prep_c = {f: a for f, a in knee_data.items() if prep_window_start <= f <= prep_window_end}
-                    if prep_c:
-                        prep_frame_num = min(prep_c, key=prep_c.get)
-
-                    follow_c = {f: a for f, a in knee_data.items() if follow_window_start <= f <= follow_window_end}
-                    if follow_c:
-                        follow_frame_num = max(follow_c, key=follow_c.get)
-
-                try:
-                    gemini_client.files.delete(name=video_file.name)
-                except Exception:
-                    pass
-
-            except Exception:
+        if False:  # Gemini placeholder
                 pass  # fallback to default values
 
         ball_found = True

@@ -608,14 +608,11 @@
       document.getElementById('btn-analyze-frame').style.display = 'none';
 
       videoEl.onloadedmetadata = () => {
-        document.getElementById('frame-slider').max = videoEl.duration;
-        document.getElementById('frame-slider').value = videoEl.duration / 2;
-        seekVideo(videoEl.duration / 2);
-        document.getElementById('video-controls').style.display = 'block';
+        document.getElementById('video-controls').style.display = 'none';
         const banner = document.getElementById('kick-banner');
         const bannerText = document.getElementById('kick-banner-text');
         banner.style.display = 'flex';
-        bannerText.textContent = '⚽ حرك السلايدر للحظة ملامسة القدم للكرة ثم اضغط تحليل';
+        bannerText.textContent = '✅ الفيديو جاهز — اضغط تحليل الفيديو كاملاً';
         bannerText.style.color = 'var(--green-light)';
       };
     }
@@ -801,12 +798,10 @@
   async function analyzeFullVideo() {
     if (!currentVideoFile) { showToast('لا يوجد فيديو محدد', 'error'); return; }
 
-    const contactTime = document.getElementById('frame-slider').value;
-    showLoading('🎬 جارٍ تحليل الفيديو...', `الملامسة عند ${parseFloat(contactTime).toFixed(1)}s`);
+    showLoading('🎬 جارٍ تحليل الفيديو...', 'يتم اكتشاف المراحل الثلاث تلقائياً');
 
     const formData = new FormData();
     formData.append('video', currentVideoFile);
-    formData.append('contact_time', contactTime);
 
     try {
       const res = await fetch('/analyze-video', { method: 'POST', body: formData });
