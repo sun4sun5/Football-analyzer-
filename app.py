@@ -172,11 +172,11 @@ def claude_analyze():
                 'content-type': 'application/json'
             },
             json={
-                'model': 'claude-opus-4-5',
-                'max_tokens': 1500,
+                'model': 'claude-haiku-4-5-20251001',
+                'max_tokens': 1000,
                 'messages': [{'role': 'user', 'content': message_content}]
             },
-            timeout=30
+            timeout=25
         )
         result = response.json()
         if 'content' in result:
@@ -455,11 +455,11 @@ def claude_video():
                 'content-type': 'application/json'
             },
             json={
-                'model': 'claude-opus-4-5',
-                'max_tokens': 2000,
+                'model': 'claude-haiku-4-5-20251001',
+                'max_tokens': 1200,
                 'messages': [{'role': 'user', 'content': message_content}]
             },
-            timeout=90
+            timeout=25
         )
         result = response.json()
         if 'content' in result:
