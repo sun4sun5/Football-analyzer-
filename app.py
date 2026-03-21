@@ -1,4 +1,6 @@
 import os
+import re
+import time
 import tempfile
 import requests as http_requests
 from flask import Flask, request, jsonify, render_template
@@ -7,6 +9,8 @@ import mediapipe as mp
 import numpy as np
 import cv2
 import base64
+from google import genai
+from google.genai import types as genai_types
 
 app = Flask(__name__)
 CORS(app)
@@ -14,6 +18,8 @@ app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB max video
 mp_pose = mp.solutions.pose
 
 CLAUDE_API_KEY = os.environ.get('CLAUDE_API_KEY', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+gemini_client  = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 @app.route('/')
 def home():
@@ -292,69 +298,62 @@ def analyze_video():
         else:
             contact_frame_num = total_frames // 2
 
-        # ── Step 2: Extract candidate frames and ask Claude Vision to identify phases ──
-        # Sample frames: every 0.2s in window [-1.5s, +1.0s] around contact
-        window_start = max(0, contact_frame_num - int(fps * 1.5))
-        window_end   = min(total_frames - 1, contact_frame_num + int(fps * 1.0))
-        sample_step  = max(1, int(fps * 0.2))
-
-        candidate_frames = {}  # index -> (frame_num, base64)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, window_start)
-        frame_num = window_start
-        idx = 0
-        while frame_num <= window_end:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if (frame_num - window_start) % sample_step == 0:
-                small = cv2.resize(frame, (320, 180))
-                _, buf = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                b64 = base64.b64encode(buf).decode('utf-8')
-                candidate_frames[idx] = (frame_num, b64)
-                idx += 1
-            frame_num += 1
         cap.release()
 
-        # Ask Claude Vision to identify the 3 phases
+        # ── Step 2: Use Gemini to identify the 3 phases from the full video ──
         prep_frame_num   = max(0, contact_frame_num - int(fps * 0.4))
         follow_frame_num = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
 
-        if candidate_frames and CLAUDE_API_KEY:
-            content = []
-            for i, (fn, b64) in candidate_frames.items():
-                t = round(fn / fps, 1)
-                content.append({"type": "text", "text": f"الفريم {i} (الثانية {t}):"})
-                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
-            content.append({"type": "text", "text": (
-                "هذه فريمات متتالية من فيديو تسديدة كرة قدم. "
-                "حدد:\n"
-                "1. أي فريم يمثل مرحلة التحضير (الـ backswing — القدم في أعلى نقطة خلف الجسم)\n"
-                "2. أي فريم يمثل لحظة الملامسة (القدم تلمس الكرة)\n"
-                "3. أي فريم يمثل المتابعة (follow-through — بعد الضربة)\n"
-                "أجب بهذا الشكل الحرفي فقط:\n"
-                "PREP=<رقم الفريم>\nCONTACT=<رقم الفريم>\nFOLLOW=<رقم الفريم>"
-            )})
-
+        if gemini_client:
             try:
-                resp = http_requests.post(
-                    'https://api.anthropic.com/v1/messages',
-                    headers={'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
-                    json={'model': 'claude-haiku-4-5-20251001', 'max_tokens': 50, 'messages': [{'role': 'user', 'content': content}]},
-                    timeout=25
-                )
-                result = resp.json()
-                if 'content' in result:
-                    text = result['content'][0]['text']
-                    import re
-                    pm = re.search(r'PREP=(\d+)', text)
-                    cm = re.search(r'CONTACT=(\d+)', text)
-                    fm = re.search(r'FOLLOW=(\d+)', text)
-                    if pm and int(pm.group(1)) in candidate_frames:
-                        prep_frame_num = candidate_frames[int(pm.group(1))][0]
-                    if cm and int(cm.group(1)) in candidate_frames:
-                        contact_frame_num = candidate_frames[int(cm.group(1))][0]
-                    if fm and int(fm.group(1)) in candidate_frames:
-                        follow_frame_num = candidate_frames[int(fm.group(1))][0]
+                duration = total_frames / fps
+                # Upload video to Gemini Files API
+                with open(tmp_path, 'rb') as f:
+                    video_file = gemini_client.files.upload(
+                        file=f,
+                        config=genai_types.UploadFileConfig(mime_type='video/mp4')
+                    )
+                # Wait for processing (max 40s)
+                for _ in range(20):
+                    video_file = gemini_client.files.get(name=video_file.name)
+                    if video_file.state.name == 'ACTIVE':
+                        break
+                    time.sleep(2)
+
+                if video_file.state.name == 'ACTIVE':
+                    prompt = (
+                        f"هذا فيديو لتسديدة كرة قدم مدته {duration:.1f} ثانية. "
+                        f"المستخدم أشار إلى أن لحظة الملامسة تقريباً عند الثانية {round(contact_frame_num/fps, 1)}. "
+                        "حدد بدقة الثانية التي تمثل كل مرحلة:\n"
+                        "1. التحضير: لحظة ذروة الـ backswing (القدم في أعلى نقطة خلف الجسم)\n"
+                        "2. الملامسة: اللحظة الفعلية التي تلمس فيها القدم الكرة\n"
+                        "3. المتابعة: ذروة الـ follow-through (القدم في أعلى نقطة أمام الجسم)\n"
+                        "أجب بهذا الشكل الحرفي فقط (أرقام عشرية):\n"
+                        "PREP=<ثانية>\nCONTACT=<ثانية>\nFOLLOW=<ثانية>"
+                    )
+                    response = gemini_client.models.generate_content(
+                        model='gemini-2.0-flash',
+                        contents=[
+                            genai_types.Part.from_uri(file_uri=video_file.uri, mime_type='video/mp4'),
+                            prompt
+                        ]
+                    )
+                    text = response.text
+                    pm = re.search(r'PREP=([\d.]+)', text)
+                    cm = re.search(r'CONTACT=([\d.]+)', text)
+                    fm = re.search(r'FOLLOW=([\d.]+)', text)
+                    if pm:
+                        prep_frame_num = min(total_frames-1, max(0, int(float(pm.group(1)) * fps)))
+                    if cm:
+                        contact_frame_num = min(total_frames-1, max(0, int(float(cm.group(1)) * fps)))
+                    if fm:
+                        follow_frame_num = min(total_frames-1, max(0, int(float(fm.group(1)) * fps)))
+
+                try:
+                    gemini_client.files.delete(name=video_file.name)
+                except Exception:
+                    pass
+
             except Exception:
                 pass  # fallback to default values
 
