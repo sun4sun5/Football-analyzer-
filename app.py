@@ -292,52 +292,71 @@ def analyze_video():
         else:
             contact_frame_num = total_frames // 2
 
-        # ── Step 2: Find prep & follow frames using biomechanics (pose-based) ──
-        # Preparation = frame with MAX knee flexion (smallest angle) in window before contact
-        # Follow-through = frame with MIN knee flexion (largest angle) in window after contact
-        prep_window_start  = max(0, contact_frame_num - int(fps * 1.5))
-        prep_window_end    = max(0, contact_frame_num - int(fps * 0.1))
-        follow_window_start = min(total_frames - 1, contact_frame_num + int(fps * 0.1))
-        follow_window_end   = min(total_frames - 1, contact_frame_num + int(fps * 1.0))
+        # ── Step 2: Extract candidate frames and ask Claude Vision to identify phases ──
+        # Sample frames: every 0.2s in window [-1.5s, +1.0s] around contact
+        window_start = max(0, contact_frame_num - int(fps * 1.5))
+        window_end   = min(total_frames - 1, contact_frame_num + int(fps * 1.0))
+        sample_step  = max(1, int(fps * 0.2))
 
-        step = max(1, round(fps / 15))
-        knee_data = {}  # frame_num -> min_knee_angle
-
-        with mp_pose.Pose(static_image_mode=False, model_complexity=1,
-                          min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, prep_window_start)
-            frame_num = prep_window_start
-            while frame_num <= follow_window_end:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if frame_num % step == 0:
-                    h, w = frame.shape[:2]
-                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    results = pose.process(img_rgb)
-                    if results.pose_landmarks:
-                        lm = results.pose_landmarks.landmark
-                        def p(i): return [lm[i].x, lm[i].y]
-                        rk = calculate_angle(p(24), p(26), p(28))
-                        lk = calculate_angle(p(23), p(25), p(27))
-                        knee_data[frame_num] = min(rk, lk)
-                frame_num += 1
-
+        candidate_frames = {}  # index -> (frame_num, base64)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, window_start)
+        frame_num = window_start
+        idx = 0
+        while frame_num <= window_end:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if (frame_num - window_start) % sample_step == 0:
+                small = cv2.resize(frame, (320, 180))
+                _, buf = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                b64 = base64.b64encode(buf).decode('utf-8')
+                candidate_frames[idx] = (frame_num, b64)
+                idx += 1
+            frame_num += 1
         cap.release()
 
-        # Preparation: frame with smallest knee angle (max backswing) in prep window
-        prep_candidates = {f: a for f, a in knee_data.items() if prep_window_start <= f <= prep_window_end}
-        if prep_candidates:
-            prep_frame_num = min(prep_candidates, key=prep_candidates.get)
-        else:
-            prep_frame_num = max(0, contact_frame_num - int(fps * 0.4))
+        # Ask Claude Vision to identify the 3 phases
+        prep_frame_num   = max(0, contact_frame_num - int(fps * 0.4))
+        follow_frame_num = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
 
-        # Follow-through: frame with largest knee angle (max extension) in follow window
-        follow_candidates = {f: a for f, a in knee_data.items() if follow_window_start <= f <= follow_window_end}
-        if follow_candidates:
-            follow_frame_num = max(follow_candidates, key=follow_candidates.get)
-        else:
-            follow_frame_num = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
+        if candidate_frames and CLAUDE_API_KEY:
+            content = []
+            for i, (fn, b64) in candidate_frames.items():
+                t = round(fn / fps, 1)
+                content.append({"type": "text", "text": f"الفريم {i} (الثانية {t}):"})
+                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
+            content.append({"type": "text", "text": (
+                "هذه فريمات متتالية من فيديو تسديدة كرة قدم. "
+                "حدد:\n"
+                "1. أي فريم يمثل مرحلة التحضير (الـ backswing — القدم في أعلى نقطة خلف الجسم)\n"
+                "2. أي فريم يمثل لحظة الملامسة (القدم تلمس الكرة)\n"
+                "3. أي فريم يمثل المتابعة (follow-through — بعد الضربة)\n"
+                "أجب بهذا الشكل الحرفي فقط:\n"
+                "PREP=<رقم الفريم>\nCONTACT=<رقم الفريم>\nFOLLOW=<رقم الفريم>"
+            )})
+
+            try:
+                resp = http_requests.post(
+                    'https://api.anthropic.com/v1/messages',
+                    headers={'x-api-key': CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
+                    json={'model': 'claude-haiku-4-5-20251001', 'max_tokens': 50, 'messages': [{'role': 'user', 'content': content}]},
+                    timeout=25
+                )
+                result = resp.json()
+                if 'content' in result:
+                    text = result['content'][0]['text']
+                    import re
+                    pm = re.search(r'PREP=(\d+)', text)
+                    cm = re.search(r'CONTACT=(\d+)', text)
+                    fm = re.search(r'FOLLOW=(\d+)', text)
+                    if pm and int(pm.group(1)) in candidate_frames:
+                        prep_frame_num = candidate_frames[int(pm.group(1))][0]
+                    if cm and int(cm.group(1)) in candidate_frames:
+                        contact_frame_num = candidate_frames[int(cm.group(1))][0]
+                    if fm and int(fm.group(1)) in candidate_frames:
+                        follow_frame_num = candidate_frames[int(fm.group(1))][0]
+            except Exception:
+                pass  # fallback to default values
 
         ball_found = True
 
