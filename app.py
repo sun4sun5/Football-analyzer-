@@ -33,20 +33,37 @@ def analyze():
     nparr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    with mp_pose.Pose(static_image_mode=True) as pose:
-        results = pose.process(img_rgb)
-        if not results.pose_landmarks:
-            return jsonify({'error': 'لم يُرصد جسم في الصورة'})
-        lm = results.pose_landmarks.landmark
-        def p(i): return [lm[i].x, lm[i].y]
-        angles = {
-            'rightKnee': calculate_angle(p(24), p(26), p(28)),
-            'leftKnee': calculate_angle(p(23), p(25), p(27)),
-            'rightHip': calculate_angle(p(12), p(24), p(26)),
-            'leftHip': calculate_angle(p(11), p(23), p(25)),
-            'trunk': calculate_angle(p(11), p(23), p(24))
-        }
-        return jsonify({'angles': angles})
+    def try_detect(image_rgb):
+        """Try pose detection with multiple scales and confidence levels."""
+        h, w = image_rgb.shape[:2]
+        scales = [1.0, 1.5, 2.0, 0.75]
+        confidences = [0.3, 0.2]
+        for conf in confidences:
+            for scale in scales:
+                if scale != 1.0:
+                    new_w, new_h = int(w * scale), int(h * scale)
+                    img_scaled = cv2.resize(image_rgb, (new_w, new_h))
+                else:
+                    img_scaled = image_rgb
+                with mp_pose.Pose(static_image_mode=True, min_detection_confidence=conf) as pose:
+                    r = pose.process(img_scaled)
+                    if r.pose_landmarks:
+                        return r
+        return None
+
+    results = try_detect(img_rgb)
+    if results is None:
+        return jsonify({'error': 'لم يُرصد جسم في الصورة — حاول رفع صورة أقرب للاعب'})
+    lm = results.pose_landmarks.landmark
+    def p(i): return [lm[i].x, lm[i].y]
+    angles = {
+        'rightKnee': calculate_angle(p(24), p(26), p(28)),
+        'leftKnee': calculate_angle(p(23), p(25), p(27)),
+        'rightHip': calculate_angle(p(12), p(24), p(26)),
+        'leftHip': calculate_angle(p(11), p(23), p(25)),
+        'trunk': calculate_angle(p(11), p(23), p(24))
+    }
+    return jsonify({'angles': angles})
 
 @app.route('/claude', methods=['POST'])
 def claude_analyze():
