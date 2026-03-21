@@ -798,7 +798,7 @@
   async function analyzeFullVideo() {
     if (!currentVideoFile) { showToast('لا يوجد فيديو محدد', 'error'); return; }
 
-    showLoading('🎬 جارٍ تحليل الفيديو...', 'يتم اكتشاف المراحل الثلاث تلقائياً');
+    showLoading('🎬 جارٍ تحليل الفيديو...', 'يتم اكتشاف لحظة الملامسة وتحليل الوضعية');
 
     const formData = new FormData();
     formData.append('video', currentVideoFile);
@@ -813,12 +813,12 @@
         return;
       }
 
-      updateLoading('🤖 جارٍ التحليل الشامل بالذكاء الاصطناعي...', 'Claude يحلل الحركة الكاملة');
+      updateLoading('🤖 جارٍ تحليل النتائج بالذكاء الاصطناعي...', 'Claude يحلل وضعية اللاعب');
 
-      const claudeRes = await fetch('/claude-video', {
+      const claudeRes = await fetch('/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phases: data.phases, skill: selectedSkill })
+        body: JSON.stringify({ angles: data.angles, skill: selectedSkill, image: data.thumbnail })
       });
       const claudeData = await claudeRes.json();
 
@@ -829,8 +829,8 @@
         return;
       }
 
-      showVideoResults(data.phases, claudeData.analysis);
-      showToast('✅ تم تحليل الفيديو الكامل!', 'success');
+      showResults(data.angles, claudeData.analysis);
+      showToast('✅ تم تحليل الفيديو!', 'success');
 
     } catch (err) {
       hideLoading();

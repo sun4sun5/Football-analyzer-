@@ -290,12 +290,12 @@ def analyze_video():
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # ── Step 1: Scan all frames — track ankle velocity + knee angle ──
-        ankle_pos  = {}   # frame -> (x, y)
-        knee_angle = {}   # frame -> min_knee_angle
-
+        # ── Scan all frames: find best frame = highest pose confidence near contact ──
         step = max(1, round(fps / 15))
-        with mp_pose.Pose(static_image_mode=False, model_complexity=1,
+        best_frame_data = None   # (frame_bgr, pose_result, score)
+        ankle_pos = {}
+
+        with mp_pose.Pose(static_image_mode=False, model_complexity=2,
                           min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
             fn = 0
             while True:
@@ -308,23 +308,21 @@ def analyze_video():
                     r = pose.process(img_rgb)
                     if r.pose_landmarks:
                         lm = r.pose_landmarks.landmark
-                        # Ankle tracking
+                        # Ankle tracking for velocity
                         ankles = [(lm[i].x*w, lm[i].y*h, lm[i].visibility) for i in [27,28] if lm[i].visibility > 0.2]
                         if ankles:
                             ax, ay, _ = max(ankles, key=lambda a: a[2])
                             ankle_pos[fn] = (ax, ay)
-                        # Knee angles
-                        def p(i): return [lm[i].x, lm[i].y]
-                        rk = calculate_angle(p(24), p(26), p(28))
-                        lk = calculate_angle(p(23), p(25), p(27))
-                        knee_angle[fn] = min(rk, lk)
+                        # Pose quality score = avg visibility of key joints
+                        key_joints = [23,24,25,26,27,28]
+                        score = sum(lm[i].visibility for i in key_joints) / len(key_joints)
+                        if best_frame_data is None or score > best_frame_data[2]:
+                            best_frame_data = (frame.copy(), r, score, fn)
                 fn += 1
-        cap.release()
 
-        # ── Step 2: Find contact = first ankle velocity peak in first 85% of video ──
-        contact_frame_num = int(total_frames * 0.5)
+        # ── Find contact frame (ankle velocity peak in first 85%) ──
+        contact_frame_num = total_frames // 2
         search_limit = int(total_frames * 0.85)
-
         if len(ankle_pos) >= 3:
             frames = sorted(ankle_pos.keys())
             speeds = {}
@@ -332,70 +330,46 @@ def analyze_video():
                 fp, fc, fn2 = frames[i-1], frames[i], frames[i+1]
                 if fc > search_limit:
                     break
-                px, py = ankle_pos[fp]; cx, cy = ankle_pos[fc]; nx, ny = ankle_pos[fn2]
-                speeds[fc] = (np.hypot(cx-px, cy-py) + np.hypot(nx-cx, ny-cy)) / 2
-
+                px,py = ankle_pos[fp]; cx,cy = ankle_pos[fc]; nx,ny = ankle_pos[fn2]
+                speeds[fc] = (np.hypot(cx-px,cy-py) + np.hypot(nx-cx,ny-cy)) / 2
             if speeds:
                 max_spd = max(speeds.values())
                 threshold = max_spd * 0.65
-                speed_frames = sorted(speeds.keys())
-                for i in range(1, len(speed_frames)-1):
-                    fp, fc, fn2 = speed_frames[i-1], speed_frames[i], speed_frames[i+1]
+                for i in range(1, len(sorted(speeds.keys()))-1):
+                    sf = sorted(speeds.keys())
+                    fp,fc,fn2 = sf[i-1],sf[i],sf[i+1]
                     if speeds[fc] >= threshold and speeds[fc] > speeds.get(fp,0) and speeds[fc] > speeds.get(fn2,0):
                         contact_frame_num = fc
                         break
                 else:
                     contact_frame_num = max(speeds, key=speeds.get)
 
-        # ── Step 3: Find prep = max knee flexion in [-1.5s, -0.1s] before contact ──
-        prep_start = max(0, contact_frame_num - int(fps * 1.5))
-        prep_end   = max(0, contact_frame_num - int(fps * 0.1))
-        prep_candidates = {f: a for f, a in knee_angle.items() if prep_start <= f <= prep_end}
-        prep_frame_num = min(prep_candidates, key=prep_candidates.get) if prep_candidates else max(0, contact_frame_num - int(fps*0.5))
-
-        # ── Step 4: Find follow = max knee extension in [+0.1s, +0.8s] after contact ──
-        follow_start = min(total_frames-1, contact_frame_num + int(fps * 0.1))
-        follow_end   = min(total_frames-1, contact_frame_num + int(fps * 0.8))
-        follow_candidates = {f: a for f, a in knee_angle.items() if follow_start <= f <= follow_end}
-        follow_frame_num = max(follow_candidates, key=follow_candidates.get) if follow_candidates else min(total_frames-1, contact_frame_num + int(fps*0.4))
-
-        if False:  # Gemini placeholder
-                pass  # fallback to default values
-
-        ball_found = True
-
-        # ── Step 3: Seek to each phase and analyze ──
-        cap = cv2.VideoCapture(tmp_path)
-        phases = {}
-        phase_defs = [
-            ('preparation',  prep_frame_num,    'التحضير'),
-            ('contact',      contact_frame_num,  'الملامسة'),
-            ('followthrough', follow_frame_num,  'المتابعة'),
-        ]
-
-        for phase_key, f_num, phase_name in phase_defs:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, f_num)
-            ret, frame = cap.read()
-            if not ret:
-                continue
-            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = try_detect(img_rgb)
-            if result:
-                phases[phase_key] = {
-                    'angles':    extract_angles(result),
-                    'thumbnail': frame_to_base64(frame),
-                    'time':      round(f_num / fps, 1),
-                    'name':      phase_name
-                }
-
         cap.release()
 
-        if not phases:
-            return jsonify({'error': 'لم يتم اكتشاف وضعية اللاعب في أي مرحلة من الفيديو'})
+        if not best_frame_data:
+            return jsonify({'error': 'لم يتم اكتشاف وضعية اللاعب في الفيديو'})
+
+        best_frame, best_result, _, best_fn = best_frame_data
+
+        # Use contact frame if pose quality is acceptable there
+        cap2 = cv2.VideoCapture(tmp_path)
+        cap2.set(cv2.CAP_PROP_POS_FRAMES, contact_frame_num)
+        ret2, contact_frame = cap2.read()
+        cap2.release()
+
+        if ret2:
+            img_rgb2 = cv2.cvtColor(contact_frame, cv2.COLOR_BGR2RGB)
+            contact_result = try_detect(img_rgb2)
+            if contact_result:
+                best_frame = contact_frame
+                best_result = contact_result
+
+        angles = extract_angles(best_result)
+        thumbnail = frame_to_base64(best_frame)
 
         return jsonify({
-            'phases':       phases,
-            'ball_found':   ball_found,
+            'angles':       angles,
+            'thumbnail':    thumbnail,
             'contact_time': round(contact_frame_num / fps, 1)
         })
 
