@@ -317,13 +317,10 @@ def analyze_video():
 
                 if video_file.state.name == 'ACTIVE':
                     prompt = (
-                        f"هذا فيديو لتسديدة كرة قدم مدته {duration:.1f} ثانية. "
-                        "حدد بدقة الثانية التي تمثل كل مرحلة:\n"
-                        "1. التحضير: لحظة ذروة الـ backswing (القدم في أعلى نقطة خلف الجسم)\n"
-                        "2. الملامسة: اللحظة الفعلية التي تلمس فيها القدم الكرة\n"
-                        "3. المتابعة: ذروة الـ follow-through (القدم في أعلى نقطة أمام الجسم)\n"
-                        "أجب بهذا الشكل الحرفي فقط (أرقام عشرية):\n"
-                        "PREP=<ثانية>\nCONTACT=<ثانية>\nFOLLOW=<ثانية>"
+                        f"This is a football/soccer kick video, duration {duration:.1f} seconds. "
+                        "Find the EXACT timestamp (in seconds) when the player's foot makes contact with the ball. "
+                        "This is the moment of impact - when foot touches ball. "
+                        "Reply with ONLY this format: CONTACT=<seconds as decimal number>"
                     )
                     response = gemini_client.models.generate_content(
                         model='gemini-2.0-flash',
@@ -333,15 +330,46 @@ def analyze_video():
                         ]
                     )
                     text = response.text
-                    pm = re.search(r'PREP=([\d.]+)', text)
                     cm = re.search(r'CONTACT=([\d.]+)', text)
-                    fm = re.search(r'FOLLOW=([\d.]+)', text)
-                    if pm:
-                        prep_frame_num = min(total_frames-1, max(0, int(float(pm.group(1)) * fps)))
                     if cm:
                         contact_frame_num = min(total_frames-1, max(0, int(float(cm.group(1)) * fps)))
-                    if fm:
-                        follow_frame_num = min(total_frames-1, max(0, int(float(fm.group(1)) * fps)))
+
+                    # Use MediaPipe biomechanics to find prep & follow around contact
+                    prep_window_start  = max(0, contact_frame_num - int(fps * 1.5))
+                    prep_window_end    = max(0, contact_frame_num - int(fps * 0.1))
+                    follow_window_start = min(total_frames-1, contact_frame_num + int(fps * 0.1))
+                    follow_window_end   = min(total_frames-1, contact_frame_num + int(fps * 1.0))
+
+                    step = max(1, round(fps / 15))
+                    knee_data = {}
+                    cap2 = cv2.VideoCapture(tmp_path)
+                    with mp_pose.Pose(static_image_mode=False, model_complexity=1,
+                                      min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose2:
+                        cap2.set(cv2.CAP_PROP_POS_FRAMES, prep_window_start)
+                        fn = prep_window_start
+                        while fn <= follow_window_end:
+                            ret2, fr = cap2.read()
+                            if not ret2:
+                                break
+                            if fn % step == 0:
+                                img_rgb2 = cv2.cvtColor(fr, cv2.COLOR_BGR2RGB)
+                                res2 = pose2.process(img_rgb2)
+                                if res2.pose_landmarks:
+                                    lm2 = res2.pose_landmarks.landmark
+                                    def p2(i): return [lm2[i].x, lm2[i].y]
+                                    rk = calculate_angle(p2(24), p2(26), p2(28))
+                                    lk = calculate_angle(p2(23), p2(25), p2(27))
+                                    knee_data[fn] = min(rk, lk)
+                            fn += 1
+                    cap2.release()
+
+                    prep_c = {f: a for f, a in knee_data.items() if prep_window_start <= f <= prep_window_end}
+                    if prep_c:
+                        prep_frame_num = min(prep_c, key=prep_c.get)
+
+                    follow_c = {f: a for f, a in knee_data.items() if follow_window_start <= f <= follow_window_end}
+                    if follow_c:
+                        follow_frame_num = max(follow_c, key=follow_c.get)
 
                 try:
                     gemini_client.files.delete(name=video_file.name)
