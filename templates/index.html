@@ -605,17 +605,15 @@
       document.getElementById('preview-img').style.display = 'none';
       document.getElementById('video-controls').style.display = 'block';
       document.getElementById('btn-analyze-video').style.display = 'inline-flex';
+      document.getElementById('btn-analyze-frame').style.display = 'none';
 
       videoEl.onloadedmetadata = () => {
-        document.getElementById('frame-slider').max = videoEl.duration;
-        document.getElementById('frame-slider').value = videoEl.duration / 2;
-        seekVideo(videoEl.duration / 2);
-        document.getElementById('frame-label-text').textContent = '⚽ حرك السلايدر لحظة ملامسة القدم للكرة ثم اضغط تحليل:';
         const banner = document.getElementById('kick-banner');
         const bannerText = document.getElementById('kick-banner-text');
         banner.style.display = 'flex';
-        bannerText.textContent = 'حدد لحظة الملامسة يدوياً — النظام سيحسب التحضير والمتابعة تلقائياً';
+        bannerText.textContent = '✨ Gemini سيحدد المراحل الثلاث تلقائياً — اضغط تحليل الفيديو كاملاً';
         bannerText.style.color = 'var(--green-light)';
+        document.getElementById('video-controls').style.display = 'none';
       };
     }
 
@@ -800,12 +798,10 @@
   async function analyzeFullVideo() {
     if (!currentVideoFile) { showToast('لا يوجد فيديو محدد', 'error'); return; }
 
-    const contactTime = document.getElementById('frame-slider').value;
-    showLoading('🎬 جارٍ استخراج المراحل الثلاث...', `التحضير → الملامسة (${parseFloat(contactTime).toFixed(1)}s) → المتابعة`);
+    showLoading('🎬 جارٍ تحليل الفيديو...', 'Gemini يحدد لحظة التحضير والملامسة والمتابعة');
 
     const formData = new FormData();
     formData.append('video', currentVideoFile);
-    formData.append('contact_time', contactTime);
 
     try {
       const res = await fetch('/analyze-video', { method: 'POST', body: formData });
