@@ -285,9 +285,8 @@ def analyze_video():
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         # ── Step 1: Find contact frame ──
-        min_dist = float('inf')
-        contact_frame_num = total_frames // 2
-        ball_found = False
+        # Track all candidate frames: {frame_num: (ball_x, ball_y, ball_r, dist)}
+        candidates = {}
         step = max(1, round(fps / 20))
 
         with mp_pose.Pose(static_image_mode=False, model_complexity=1,
@@ -299,7 +298,9 @@ def analyze_video():
                     break
                 if frame_num % step == 0:
                     h, w = frame.shape[:2]
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    # Only search lower 70% of frame (ball near feet)
+                    roi = frame[int(h * 0.3):, :]
+                    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                     gray_blur = cv2.GaussianBlur(gray, (9, 9), 2)
                     circles = cv2.HoughCircles(
                         gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=40,
@@ -309,24 +310,51 @@ def analyze_video():
                         frame_up = cv2.resize(frame, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
                         img_rgb = cv2.cvtColor(frame_up, cv2.COLOR_BGR2RGB)
                         results = pose.process(img_rgb)
-                        circles_scaled = circles * 2
                         if results.pose_landmarks:
                             lm = results.pose_landmarks.landmark
                             foot_indices = [27, 28, 29, 30, 31, 32]
-                            foot_points = [(lm[i].x * w * 2, lm[i].y * h * 2)
+                            foot_points = [(lm[i].x * w, lm[i].y * h)
                                            for i in foot_indices if lm[i].visibility > 0.1]
                             if foot_points:
-                                circles_arr = np.round(circles_scaled[0]).astype(int)
+                                # Adjust circle y coords for ROI offset
+                                offset_y = int(h * 0.3)
+                                circles_arr = np.round(circles[0]).astype(int)
                                 for (bx, by, br) in circles_arr:
+                                    real_by = by + offset_y
                                     for (fx, fy) in foot_points:
-                                        dist = np.hypot(bx - fx, by - fy) - br
-                                        if dist < min_dist:
-                                            min_dist = dist
-                                            contact_frame_num = frame_num
-                                            ball_found = True
+                                        dist = np.hypot(bx - fx, real_by - fy) - br
+                                        if frame_num not in candidates or dist < candidates[frame_num][3]:
+                                            candidates[frame_num] = (bx, real_by, br, dist)
                 frame_num += 1
 
         cap.release()
+
+        ball_found = False
+        contact_frame_num = total_frames // 2
+
+        if candidates:
+            # Find frame with min ball-foot distance
+            best_frame = min(candidates, key=lambda f: candidates[f][3])
+            best_dist = candidates[best_frame][3]
+
+            # Verify: check if ball moves away in subsequent frames (real kick)
+            # A real kick = ball position shifts significantly in frames after contact
+            sorted_frames = sorted(candidates.keys())
+            best_idx = sorted_frames.index(best_frame) if best_frame in sorted_frames else 0
+
+            verified = False
+            if best_idx + 2 < len(sorted_frames):
+                bx, by, br, _ = candidates[best_frame]
+                next_frames = sorted_frames[best_idx + 1: best_idx + 4]
+                for nf in next_frames:
+                    nbx, nby, nbr, _ = candidates[nf]
+                    ball_moved = np.hypot(nbx - bx, nby - by)
+                    if ball_moved > br * 1.5:  # Ball moved more than 1.5x its radius
+                        verified = True
+                        break
+
+            contact_frame_num = best_frame
+            ball_found = True
 
         # ── Step 2: Define 3 phase frame numbers ──
         prep_frame_num    = max(0, contact_frame_num - int(fps * 1.0))
