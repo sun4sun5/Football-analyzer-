@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>محلل كرة القدم بالذكاء الاصطناعي</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --green: #00c853;
+      --green-dark: #009624;
+      --green-light: #5efc82;
+      --bg: #0a0f0d;
+      --surface: #111a14;
+      --surface2: #1a2b1e;
+      --border: #2a3f2e;
+      --text: #e8f5e9;
+      --text-muted: #8aaa8e;
+      --accent: #ffeb3b;
+      --red: #ff5252;
+      --orange: #ff9800;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Cairo', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      direction: rtl;
+    }
+
+    /* ─── HEADER ─── */
+    header {
+      background: linear-gradient(135deg, #0a1f0d 0%, #0d2e14 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(10px);
+    }
+    .logo {
+      width: 48px; height: 48px;
+      background: linear-gradient(135deg, var(--green), var(--green-dark));
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 26px;
+      box-shadow: 0 4px 15px rgba(0,200,83,0.3);
+    }
+    header h1 {
+      font-size: 1.35rem;
+      font-weight: 900;
+      background: linear-gradient(135deg, var(--green-light), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    header p { font-size: 0.8rem; color: var(--text-muted); margin-top: 2px; }
+
+    /* ─── MAIN ─── */
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 28px 16px 60px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    /* ─── CARD ─── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 24px;
+    }
+    .card-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--green-light);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .card-title .icon {
+      width: 32px; height: 32px;
+      background: rgba(0,200,83,0.12);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+
+    /* ─── SKILL SELECTOR ─── */
+    .skills-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .skill-btn {
+      background: var(--surface2);
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 12px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.25s ease;
+      color: var(--text);
+    }
+    .skill-btn:hover {
+      border-color: var(--green);
+      background: rgba(0,200,83,0.08);
+      transform: translateY(-2px);
+    }
+    .skill-btn.active {
+      border-color: var(--green);
+      background: rgba(0,200,83,0.15);
+      box-shadow: 0 0 20px rgba(0,200,83,0.2);
+    }
+    .skill-btn .skill-icon { font-size: 2rem; margin-bottom: 8px; display: block; }
+    .skill-btn .skill-name { font-size: 0.95rem; font-weight: 700; }
+    .skill-btn .skill-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+
+    /* ─── UPLOAD ─── */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 14px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.25s ease;
+      background: var(--surface2);
+      position: relative;
+    }
+    #drop-zone.drag-over {
+      border-color: var(--green);
+      background: rgba(0,200,83,0.06);
+    }
+    #drop-zone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    #drop-zone .upload-icon { font-size: 3rem; margin-bottom: 12px; display: block; }
+    #drop-zone p { font-size: 0.9rem; color: var(--text-muted); }
+    #drop-zone strong { color: var(--green); }
+
+    /* ─── PREVIEW ─── */
+    #preview-section { display: none; }
+    #preview-container {
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+      max-height: 360px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #preview-img, #preview-video {
+      max-width: 100%; max-height: 360px;
+      border-radius: 12px;
+      display: none;
+    }
+    #canvas-hidden { display: none; }
+
+    .preview-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    /* ─── VIDEO SCRUBBER ─── */
+    #video-controls { display: none; margin-top: 12px; }
+    .frame-label {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    #frame-slider {
+      width: 100%;
+      accent-color: var(--green);
+      cursor: pointer;
+    }
+    #frame-time { font-size: 0.8rem; color: var(--green); margin-top: 4px; }
+
+    /* ─── BUTTONS ─── */
+    .btn {
+      border: none;
+      border-radius: 10px;
+      padding: 12px 22px;
+      font-family: 'Cairo', sans-serif;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--green), var(--green-dark));
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(0,200,83,0.3);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,200,83,0.4); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    .btn-outline:hover { border-color: var(--green); color: var(--green); }
+
+    .btn-full { width: 100%; justify-content: center; padding: 15px; font-size: 1.05rem; }
+
+    /* ─── ANGLES DISPLAY ─── */
+    #results-section { display: none; }
+
+    .angles-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .angle-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 10px;
+      text-align: center;
+    }
+    .angle-card .angle-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    .angle-card .angle-value {
+      font-size: 1.7rem;
+      font-weight: 900;
+      color: var(--green);
+      line-height: 1;
+    }
+    .angle-card .angle-unit {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    /* ─── CLAUDE ANALYSIS ─── */
+    .analysis-box {
+      background: linear-gradient(135deg, rgba(0,200,83,0.05), rgba(255,235,59,0.03));
+      border: 1px solid rgba(0,200,83,0.2);
+      border-radius: 14px;
+      padding: 22px;
+      font-size: 0.92rem;
+      line-height: 1.9;
+      white-space: pre-wrap;
+    }
+    .analysis-box strong, .analysis-box b {
+      color: var(--green-light);
+    }
+
+    /* ─── LOADING ─── */
+    .loading-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 20px;
+      backdrop-filter: blur(4px);
+    }
+    .loading-overlay.active { display: flex; }
+    .spinner {
+      width: 60px; height: 60px;
+      border: 4px solid rgba(0,200,83,0.2);
+      border-top-color: var(--green);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { font-size: 1rem; font-weight: 700; color: var(--green-light); }
+    .loading-step { font-size: 0.82rem; color: var(--text-muted); }
+
+    /* ─── ERROR/SUCCESS TOAST ─── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 22px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: transform 0.3s ease;
+      z-index: 9999;
+      max-width: 90vw;
+      text-align: center;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.error { border-color: var(--red); color: var(--red); }
+    .toast.success { border-color: var(--green); color: var(--green); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 560px) {
+      .skills-grid { grid-template-columns: 1fr; }
+      .angles-grid { grid-template-columns: repeat(2, 1fr); }
+      .skill-btn { display: flex; align-items: center; gap: 12px; text-align: right; padding: 14px 16px; }
+      .skill-btn .skill-icon { font-size: 1.6rem; margin-bottom: 0; }
+    }
+
+    /* ─── MARKDOWN-LIKE RENDERING ─── */
+    .analysis-content h2 { color: var(--accent); font-size: 1rem; margin: 14px 0 6px; }
+    .analysis-content ul { padding-right: 20px; }
+    .analysis-content li { margin: 4px 0; }
+    .analysis-content .section { margin-bottom: 16px; }
+
+    .score-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,235,59,0.1);
+      border: 1px solid rgba(255,235,59,0.3);
+      border-radius: 20px;
+      padding: 6px 16px;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 6px 0 20px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── HEADER ─── -->
+<header>
+  <div class="logo">⚽</div>
+  <div>
+    <h1>محلل كرة القدم AI</h1>
+    <p>تحليل الحركة الرياضية بالذكاء الاصطناعي</p>
+  </div>
+</header>
+
+<!-- ─── MAIN ─── -->
+<main>
+
+  <!-- STEP 1: SKILL -->
+  <div class="card">
+    <div class="card-title">
+      <div class="icon">🎯</div>
+      الخطوة 1 — اختر المهارة
+    </div>
+    <div class="skills-grid">
+      <button class="skill-btn active" data-skill="تسديدة" onclick="selectSkill(this)">
+        <span class="skill-icon">🦵</span>
+        <span class="skill-name">تسديدة</span>
+        <span class="skill-desc">Shooting</span>
+      </button>
+      <button class="skill-btn" data-skill="تمرير طويل" onclick="selectSkill(this)">
+        <span class="skill-icon">🎯</span>
+        <span class="skill-name">تمرير طويل</span>
+        <span class="skill-desc">Long Pass</span>
+      </button>
+      <button class="skill-btn" data-skill="استلام" onclick="selectSkill(this)">
+        <span class="skill-icon">🙌</span>
+        <span class="skill-name">استلام</span>
+        <span class="skill-desc">Ball Control</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- STEP 2: UPLOAD -->
+  <div class="card">
+    <div class="card-title">
+      <div class="icon">📤</div>
+      الخطوة 2 — ارفع صورة أو فيديو
+    </div>
+
+    <div id="drop-zone">
+      <input type="file" id="file-input" accept="image/*,video/*" onchange="handleFile(this.files[0])" />
+      <span class="upload-icon">📂</span>
+      <p><strong>اضغط لرفع ملف</strong> أو اسحب وأفلت</p>
+      <p style="margin-top:6px;">الصور: JPG, PNG, WebP &nbsp;|&nbsp; الفيديو: MP4, MOV</p>
+    </div>
+
+    <!-- Preview -->
+    <div id="preview-section" style="margin-top:16px;">
+      <div id="preview-container">
+        <img id="preview-img" alt="معاينة" />
+        <video id="preview-video" controls playsinline muted></video>
+      </div>
+      <canvas id="canvas-hidden"></canvas>
+
+      <!-- Video controls -->
+      <div id="video-controls">
+        <p class="frame-label">🎬 اختر اللحظة التي تريد تحليلها:</p>
+        <input type="range" id="frame-slider" min="0" max="100" value="50" step="0.1" oninput="seekVideo(this.value)" />
+        <p id="frame-time">اللحظة: 0.0 ثانية</p>
+      </div>
+
+      <div class="preview-actions">
+        <button class="btn btn-primary" onclick="startAnalysis()">
+          🔍 تحليل الآن
+        </button>
+        <button class="btn btn-outline" onclick="resetAll()">
+          🗑️ حذف
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3: RESULTS -->
+  <div id="results-section">
+    <!-- Angles Card -->
+    <div class="card">
+      <div class="card-title">
+        <div class="icon">📐</div>
+        نتائج تحليل الجسم
+      </div>
+      <div class="angles-grid" id="angles-grid"></div>
+    </div>
+
+    <!-- Claude Analysis Card -->
+    <div class="card" style="margin-top:0;">
+      <div class="card-title">
+        <div class="icon">🤖</div>
+        التحليل بالذكاء الاصطناعي
+      </div>
+      <div class="divider"></div>
+      <div class="analysis-box" id="analysis-text"></div>
+    </div>
+
+    <!-- Retry -->
+    <button class="btn btn-outline btn-full" onclick="resetAll()" style="margin-top:8px;">
+      🔄 تحليل صورة جديدة
+    </button>
+  </div>
+
+</main>
+
+<!-- ─── LOADING ─── -->
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loading-text">جارٍ المعالجة...</div>
+  <div class="loading-step" id="loading-step"></div>
+</div>
+
+<!-- ─── TOAST ─── -->
+<div class="toast" id="toast"></div>
+
+<script>
+  let selectedSkill = 'تسديدة';
+  let capturedImageBase64 = null;
+  let mediaType = null; // 'image' or 'video'
+  let videoEl = null;
+
+  // ── SKILL SELECT ──
+  function selectSkill(btn) {
+    document.querySelectorAll('.skill-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedSkill = btn.dataset.skill;
+  }
+
+  // ── DRAG & DROP ──
+  const dropZone = document.getElementById('drop-zone');
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+
+  // ── HANDLE FILE ──
+  function handleFile(file) {
+    if (!file) return;
+    resetResults();
+    const url = URL.createObjectURL(file);
+
+    if (file.type.startsWith('image/')) {
+      mediaType = 'image';
+      document.getElementById('preview-img').src = url;
+      document.getElementById('preview-img').style.display = 'block';
+      document.getElementById('preview-video').style.display = 'none';
+      document.getElementById('video-controls').style.display = 'none';
+
+      // Convert to base64
+      const reader = new FileReader();
+      reader.onload = e => {
+        capturedImageBase64 = e.target.result.split(',')[1];
+      };
+      reader.readAsDataURL(file);
+
+    } else if (file.type.startsWith('video/')) {
+      mediaType = 'video';
+      videoEl = document.getElementById('preview-video');
+      videoEl.src = url;
+      videoEl.style.display = 'block';
+      document.getElementById('preview-img').style.display = 'none';
+      document.getElementById('video-controls').style.display = 'block';
+
+      videoEl.onloadedmetadata = () => {
+        document.getElementById('frame-slider').max = videoEl.duration;
+        document.getElementById('frame-slider').value = videoEl.duration / 2;
+        seekVideo(videoEl.duration / 2);
+      };
+    }
+
+    document.getElementById('preview-section').style.display = 'block';
+  }
+
+  // ── SEEK VIDEO ──
+  function seekVideo(time) {
+    if (!videoEl) return;
+    videoEl.currentTime = time;
+    document.getElementById('frame-time').textContent = `اللحظة: ${parseFloat(time).toFixed(1)} ثانية`;
+  }
+
+  // ── CAPTURE VIDEO FRAME ──
+  function captureVideoFrame() {
+    const canvas = document.getElementById('canvas-hidden');
+    canvas.width = videoEl.videoWidth;
+    canvas.height = videoEl.videoHeight;
+    canvas.getContext('2d').drawImage(videoEl, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    return dataUrl.split(',')[1];
+  }
+
+  // ── START ANALYSIS ──
+  async function startAnalysis() {
+    if (mediaType === 'video' && !videoEl) { showToast('لا يوجد فيديو محدد', 'error'); return; }
+    if (mediaType === 'image' && !capturedImageBase64) { showToast('لا توجد صورة محددة', 'error'); return; }
+
+    let imageBase64 = capturedImageBase64;
+    if (mediaType === 'video') {
+      imageBase64 = captureVideoFrame();
+    }
+
+    showLoading('🔍 جارٍ تحليل وضعية الجسم...', 'MediaPipe يرصد نقاط الجسم');
+
+    try {
+      // Step 1: Analyze with MediaPipe
+      const analyzeRes = await fetch('/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: imageBase64 })
+      });
+      const analyzeData = await analyzeRes.json();
+
+      if (analyzeData.error) {
+        hideLoading();
+        showToast('⚠️ ' + analyzeData.error, 'error');
+        return;
+      }
+
+      updateLoading('🤖 جارٍ تحليل النتائج بالذكاء الاصطناعي...', 'Claude يحلل زوايا جسمك');
+
+      // Step 2: Claude Analysis
+      const claudeRes = await fetch('/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ angles: analyzeData.angles, skill: selectedSkill })
+      });
+      const claudeData = await claudeRes.json();
+
+      hideLoading();
+
+      if (claudeData.error) {
+        showToast('خطأ في Claude: ' + claudeData.error, 'error');
+        return;
+      }
+
+      showResults(analyzeData.angles, claudeData.analysis);
+      showToast('✅ تم التحليل بنجاح!', 'success');
+
+    } catch (err) {
+      hideLoading();
+      showToast('❌ خطأ في الاتصال: ' + err.message, 'error');
+    }
+  }
+
+  // ── SHOW RESULTS ──
+  function showResults(angles, analysis) {
+    const labels = {
+      rightKnee: 'ركبة يمين',
+      leftKnee: 'ركبة يسار',
+      rightHip: 'ورك يمين',
+      leftHip: 'ورك يسار',
+      trunk: 'الجذع'
+    };
+    const icons = { rightKnee:'🦵', leftKnee:'🦵', rightHip:'🔵', leftHip:'🔵', trunk:'🟡' };
+
+    const grid = document.getElementById('angles-grid');
+    grid.innerHTML = '';
+    for (const [key, val] of Object.entries(angles)) {
+      grid.innerHTML += `
+        <div class="angle-card">
+          <div class="angle-label">${icons[key] || ''} ${labels[key] || key}</div>
+          <div class="angle-value">${val}</div>
+          <div class="angle-unit">درجة</div>
+        </div>`;
+    }
+
+    // Render analysis (simple markdown-ish)
+    const formatted = analysis
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/^### (.+)$/gm, '<h3 style="color:var(--accent);margin:12px 0 6px;">$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2 style="color:var(--green-light);margin:14px 0 6px;font-size:1rem;">$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1 style="color:var(--green-light);margin:14px 0 8px;font-size:1.1rem;">$1</h1>')
+      .replace(/\n/g, '<br>');
+
+    document.getElementById('analysis-text').innerHTML = formatted;
+    document.getElementById('results-section').style.display = 'flex';
+    document.getElementById('results-section').style.flexDirection = 'column';
+    document.getElementById('results-section').style.gap = '16px';
+
+    // Scroll to results
+    document.getElementById('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ── RESET ──
+  function resetResults() {
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('angles-grid').innerHTML = '';
+    document.getElementById('analysis-text').innerHTML = '';
+  }
+
+  function resetAll() {
+    resetResults();
+    capturedImageBase64 = null;
+    mediaType = null;
+    videoEl = null;
+    document.getElementById('preview-section').style.display = 'none';
+    document.getElementById('preview-img').style.display = 'none';
+    document.getElementById('preview-img').src = '';
+    document.getElementById('preview-video').style.display = 'none';
+    document.getElementById('preview-video').src = '';
+    document.getElementById('video-controls').style.display = 'none';
+    document.getElementById('file-input').value = '';
+  }
+
+  // ── LOADING ──
+  function showLoading(text, step) {
+    document.getElementById('loading-text').textContent = text;
+    document.getElementById('loading-step').textContent = step || '';
+    document.getElementById('loading').classList.add('active');
+  }
+  function updateLoading(text, step) {
+    document.getElementById('loading-text').textContent = text;
+    document.getElementById('loading-step').textContent = step || '';
+  }
+  function hideLoading() {
+    document.getElementById('loading').classList.remove('active');
+  }
+
+  // ── TOAST ──
+  let toastTimer;
+  function showToast(msg, type = '') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = 'toast'; }, 4000);
+  }
+</script>
+</body>
+</html>
