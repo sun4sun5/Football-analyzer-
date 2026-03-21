@@ -284,80 +284,19 @@ def analyze_video():
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # ── Step 1: Find contact frame using foot velocity (peak = ball contact) ──
-        step = max(1, round(fps / 20))
-        foot_positions = {}  # frame_num -> (ankle_x, ankle_y)
+        # ── Step 1: Get contact time from user (manual selection) ──
+        contact_time = request.form.get('contact_time', None)
+        if contact_time is not None:
+            contact_frame_num = int(float(contact_time) * fps)
+            contact_frame_num = max(0, min(total_frames - 1, contact_frame_num))
+            ball_found = True
+        else:
+            contact_frame_num = total_frames // 2
+            ball_found = False
 
-        with mp_pose.Pose(static_image_mode=False, model_complexity=1,
-                          min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
-            frame_num = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if frame_num % step == 0:
-                    h, w = frame.shape[:2]
-                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    results = pose.process(img_rgb)
-                    if results.pose_landmarks:
-                        lm = results.pose_landmarks.landmark
-                        # Track both ankles, pick the more visible one
-                        ankles = []
-                        for idx in [27, 28]:  # left ankle, right ankle
-                            if lm[idx].visibility > 0.2:
-                                ankles.append((lm[idx].x * w, lm[idx].y * h, lm[idx].visibility))
-                        if ankles:
-                            # Pick ankle with highest visibility
-                            ax, ay, _ = max(ankles, key=lambda a: a[2])
-                            foot_positions[frame_num] = (ax, ay)
-                frame_num += 1
-
-        cap.release()
-
-        ball_found = False
-        contact_frame_num = total_frames // 2
-
-        if len(foot_positions) >= 3:
-            sorted_frames = sorted(foot_positions.keys())
-
-            # Calculate speed at each frame
-            speeds = {}
-            for i in range(1, len(sorted_frames) - 1):
-                f_prev = sorted_frames[i - 1]
-                f_curr = sorted_frames[i]
-                f_next = sorted_frames[i + 1]
-                px, py = foot_positions[f_prev]
-                cx, cy = foot_positions[f_curr]
-                nx, ny = foot_positions[f_next]
-                speeds[f_curr] = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
-
-            if speeds:
-                max_speed = max(speeds.values())
-                threshold = max_speed * 0.6  # 60% of max speed
-
-                # Find FIRST local peak above threshold (= kick contact)
-                speed_frames = sorted(speeds.keys())
-                for i in range(1, len(speed_frames) - 1):
-                    f_prev = speed_frames[i - 1]
-                    f_curr = speed_frames[i]
-                    f_next = speed_frames[i + 1]
-                    s_prev = speeds[f_prev]
-                    s_curr = speeds[f_curr]
-                    s_next = speeds[f_next]
-                    # Local peak: higher than neighbors AND above threshold
-                    if s_curr > s_prev and s_curr > s_next and s_curr >= threshold:
-                        contact_frame_num = f_curr
-                        ball_found = True
-                        break
-
-                # Fallback: use global max if no local peak found
-                if not ball_found:
-                    contact_frame_num = max(speeds, key=speeds.get)
-                    ball_found = True
-
-        # ── Step 2: Define 3 phase frame numbers ──
+        # ── Step 2: Define 3 phase frame numbers (based on research) ──
         prep_frame_num    = max(0, contact_frame_num - int(fps * 1.0))
-        follow_frame_num  = min(total_frames - 1, contact_frame_num + int(fps * 0.6))
+        follow_frame_num  = min(total_frames - 1, contact_frame_num + int(fps * 0.5))
 
         # ── Step 3: Seek to each phase and analyze ──
         cap = cv2.VideoCapture(tmp_path)
