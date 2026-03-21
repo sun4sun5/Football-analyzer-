@@ -104,6 +104,9 @@ def claude_analyze():
 
 اجعل التحليل واضحاً ومفيداً للاعب أو المدرب."""
 
+    if not CLAUDE_API_KEY:
+        return jsonify({'error': 'مفتاح API غير مضبوط — أضف CLAUDE_API_KEY في إعدادات Railway'}), 500
+
     try:
         response = http_requests.post(
             'https://api.anthropic.com/v1/messages',
@@ -113,7 +116,7 @@ def claude_analyze():
                 'content-type': 'application/json'
             },
             json={
-                'model': 'claude-opus-4-6',
+                'model': 'claude-opus-4-5',
                 'max_tokens': 1500,
                 'messages': [{'role': 'user', 'content': prompt}]
             },
@@ -123,7 +126,8 @@ def claude_analyze():
         if 'content' in result:
             return jsonify({'analysis': result['content'][0]['text']})
         else:
-            return jsonify({'error': 'خطأ في استجابة Claude', 'details': str(result)}), 500
+            error_msg = result.get('error', {}).get('message', str(result))
+            return jsonify({'error': f'خطأ من Claude API: {error_msg}'}), 500
     except Exception as e:
         return jsonify({'error': f'خطأ في الاتصال بـ Claude: {str(e)}'}), 500
 
