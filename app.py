@@ -33,22 +33,47 @@ def analyze():
     nparr = np.frombuffer(img_data, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    def enhance_image(image_rgb):
+        """Enhance contrast and sharpness for better detection."""
+        img_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+        lab = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        enhanced = cv2.merge([l, a, b])
+        enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        enhanced = cv2.filter2D(enhanced, -1, kernel)
+        return cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+
     def try_detect(image_rgb):
-        """Try pose detection with multiple scales and confidence levels."""
+        """Try pose detection with multiple scales, confidence levels, and preprocessing."""
         h, w = image_rgb.shape[:2]
-        scales = [1.0, 1.5, 2.0, 0.75]
-        confidences = [0.3, 0.2]
-        for conf in confidences:
-            for scale in scales:
-                if scale != 1.0:
-                    new_w, new_h = int(w * scale), int(h * scale)
-                    img_scaled = cv2.resize(image_rgb, (new_w, new_h))
-                else:
-                    img_scaled = image_rgb
-                with mp_pose.Pose(static_image_mode=True, min_detection_confidence=conf) as pose:
-                    r = pose.process(img_scaled)
-                    if r.pose_landmarks:
-                        return r
+        # Generate scaled versions focused on player region
+        scales = [2.0, 3.0, 1.5, 4.0, 1.0]
+        confidences = [0.3, 0.15, 0.05]
+        complexities = [2, 1]
+
+        images_to_try = [image_rgb, enhance_image(image_rgb)]
+
+        for img_variant in images_to_try:
+            for complexity in complexities:
+                for conf in confidences:
+                    for scale in scales:
+                        if scale != 1.0:
+                            new_w, new_h = int(w * scale), int(h * scale)
+                            img_scaled = cv2.resize(img_variant, (new_w, new_h),
+                                                    interpolation=cv2.INTER_CUBIC)
+                        else:
+                            img_scaled = img_variant
+                        with mp_pose.Pose(
+                            static_image_mode=True,
+                            model_complexity=complexity,
+                            min_detection_confidence=conf
+                        ) as pose:
+                            r = pose.process(img_scaled)
+                            if r.pose_landmarks:
+                                return r
         return None
 
     results = try_detect(img_rgb)
@@ -154,7 +179,8 @@ def detect_kick():
         # Sample every 3rd frame for speed
         step = max(1, round(fps / 10))  # ~10 checks per second
 
-        with mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.4) as pose:
+        with mp_pose.Pose(static_image_mode=False, model_complexity=1,
+                          min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
             frame_num = 0
             while True:
                 ret, frame = cap.read()
@@ -176,15 +202,19 @@ def detect_kick():
                 )
 
                 if circles is not None:
-                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    # Upscale frame for better pose detection on distant players
+                    frame_up = cv2.resize(frame, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+                    img_rgb = cv2.cvtColor(frame_up, cv2.COLOR_BGR2RGB)
                     results = pose.process(img_rgb)
+                    # Scale circle coordinates to match upscaled frame
+                    circles = circles * 2 if circles is not None else circles
 
                     if results.pose_landmarks:
                         lm = results.pose_landmarks.landmark
                         # Use ankles + foot index landmarks as foot points
                         foot_indices = [27, 28, 29, 30, 31, 32]
-                        foot_points = [(lm[i].x * w, lm[i].y * h)
-                                       for i in foot_indices if lm[i].visibility > 0.3]
+                        foot_points = [(lm[i].x * w * 2, lm[i].y * h * 2)
+                                       for i in foot_indices if lm[i].visibility > 0.1]
 
                         if foot_points:
                             circles_arr = np.round(circles[0]).astype(int)
