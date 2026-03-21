@@ -232,16 +232,26 @@ def detect_kick():
 
         if len(foot_positions) >= 3:
             sorted_frames = sorted(foot_positions.keys())
-            max_speed = 0.0
+            speeds = {}
             for i in range(1, len(sorted_frames) - 1):
                 f_prev, f_curr, f_next = sorted_frames[i-1], sorted_frames[i], sorted_frames[i+1]
                 px, py = foot_positions[f_prev]
                 cx, cy = foot_positions[f_curr]
                 nx, ny = foot_positions[f_next]
-                speed = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
-                if speed > max_speed:
-                    max_speed = speed
-                    best_time = f_curr / fps
+                speeds[f_curr] = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
+
+            if speeds:
+                max_speed = max(speeds.values())
+                threshold = max_speed * 0.6
+                speed_frames = sorted(speeds.keys())
+                for i in range(1, len(speed_frames) - 1):
+                    f_prev, f_curr, f_next = speed_frames[i-1], speed_frames[i], speed_frames[i+1]
+                    if speeds[f_curr] > speeds[f_prev] and speeds[f_curr] > speeds[f_next] and speeds[f_curr] >= threshold:
+                        best_time = f_curr / fps
+                        ball_found = True
+                        break
+                if not ball_found:
+                    best_time = max(speeds, key=speeds.get) / fps
                     ball_found = True
 
         cap.release()
@@ -309,7 +319,9 @@ def analyze_video():
 
         if len(foot_positions) >= 3:
             sorted_frames = sorted(foot_positions.keys())
-            max_speed = 0.0
+
+            # Calculate speed at each frame
+            speeds = {}
             for i in range(1, len(sorted_frames) - 1):
                 f_prev = sorted_frames[i - 1]
                 f_curr = sorted_frames[i]
@@ -317,11 +329,30 @@ def analyze_video():
                 px, py = foot_positions[f_prev]
                 cx, cy = foot_positions[f_curr]
                 nx, ny = foot_positions[f_next]
-                # Speed = average displacement around current frame
-                speed = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
-                if speed > max_speed:
-                    max_speed = speed
-                    contact_frame_num = f_curr
+                speeds[f_curr] = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
+
+            if speeds:
+                max_speed = max(speeds.values())
+                threshold = max_speed * 0.6  # 60% of max speed
+
+                # Find FIRST local peak above threshold (= kick contact)
+                speed_frames = sorted(speeds.keys())
+                for i in range(1, len(speed_frames) - 1):
+                    f_prev = speed_frames[i - 1]
+                    f_curr = speed_frames[i]
+                    f_next = speed_frames[i + 1]
+                    s_prev = speeds[f_prev]
+                    s_curr = speeds[f_curr]
+                    s_next = speeds[f_next]
+                    # Local peak: higher than neighbors AND above threshold
+                    if s_curr > s_prev and s_curr > s_next and s_curr >= threshold:
+                        contact_frame_num = f_curr
+                        ball_found = True
+                        break
+
+                # Fallback: use global max if no local peak found
+                if not ball_found:
+                    contact_frame_num = max(speeds, key=speeds.get)
                     ball_found = True
 
         # ── Step 2: Define 3 phase frame numbers ──
