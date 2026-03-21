@@ -207,7 +207,7 @@ def detect_kick():
         best_time = 0.0
         ball_found = False
 
-        step = max(1, round(fps / 10))
+        step = max(1, round(fps / 20))
 
         with mp_pose.Pose(static_image_mode=False, model_complexity=1,
                           min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
@@ -288,7 +288,7 @@ def analyze_video():
         min_dist = float('inf')
         contact_frame_num = total_frames // 2
         ball_found = False
-        step = max(1, round(fps / 10))
+        step = max(1, round(fps / 20))
 
         with mp_pose.Pose(static_image_mode=False, model_complexity=1,
                           min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
@@ -329,8 +329,8 @@ def analyze_video():
         cap.release()
 
         # ── Step 2: Define 3 phase frame numbers ──
-        prep_frame_num    = max(0, contact_frame_num - int(fps * 0.5))
-        follow_frame_num  = min(total_frames - 1, contact_frame_num + int(fps * 0.3))
+        prep_frame_num    = max(0, contact_frame_num - int(fps * 1.0))
+        follow_frame_num  = min(total_frames - 1, contact_frame_num + int(fps * 0.6))
 
         # ── Step 3: Seek to each phase and analyze ──
         cap = cv2.VideoCapture(tmp_path)
