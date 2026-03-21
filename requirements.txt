@@ -1,3 +1,6 @@
 flask
 flask-cors
 gunicorn
+mediapipe==0.10.9
+opencv-python
+numpy
