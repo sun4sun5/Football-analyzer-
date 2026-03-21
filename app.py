@@ -290,16 +290,22 @@ def analyze_video():
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # ── Step 1: Default positions (fallback if Gemini unavailable) ──
-        contact_frame_num = total_frames // 2
-        prep_frame_num    = max(0, contact_frame_num - int(fps * 0.4))
-        follow_frame_num  = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
+        # ── Step 1: Get contact time from user (manual selection) ──
+        contact_time = request.form.get('contact_time', None)
+        if contact_time is not None:
+            contact_frame_num = int(float(contact_time) * fps)
+            contact_frame_num = max(0, min(total_frames - 1, contact_frame_num))
+        else:
+            contact_frame_num = total_frames // 2
+
+        prep_frame_num   = max(0, contact_frame_num - int(fps * 0.4))
+        follow_frame_num = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
 
         cap.release()
 
-        # ── Step 2: Use Gemini to identify the 3 phases from the full video ──
+        # ── Step 2: (Gemini disabled - using manual contact + fixed offsets) ──
 
-        if gemini_client:
+        if False and gemini_client:  # disabled
             try:
                 duration = total_frames / fps
                 # Upload video to Gemini Files API
