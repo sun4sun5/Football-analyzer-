@@ -95,36 +95,52 @@ def analyze():
         return jsonify({'error': 'لم يُرصد جسم في الصورة — حاول رفع صورة أقرب للاعب'})
     return jsonify({'angles': extract_angles(results)})
 
+def resize_for_claude(image_b64, max_width=800):
+    """Resize image to keep Claude API tokens reasonable."""
+    try:
+        img_data = base64.b64decode(image_b64)
+        nparr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        h, w = img.shape[:2]
+        if w > max_width:
+            scale = max_width / w
+            img = cv2.resize(img, (max_width, int(h * scale)))
+        _, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return base64.b64encode(buf).decode('utf-8')
+    except Exception:
+        return image_b64
+
 @app.route('/claude', methods=['POST'])
 def claude_analyze():
     data = request.json
-    angles = data.get('angles', {})
-    skill = data.get('skill', 'تسديدة')
+    angles   = data.get('angles', {})
+    skill    = data.get('skill', 'تسديدة')
+    image_b64 = data.get('image', None)   # صورة اللاعب (اختياري)
 
     skill_context = {
-        'تسديدة': 'ركلة تسديدة على المرمى (shooting). الزوايا المثالية: ركبة الركل 120-150°، ورك الركل 30-60°، جذع مائل للأمام قليلاً',
+        'تسديدة':     'ركلة تسديدة على المرمى (shooting). الزوايا المثالية: ركبة الركل 120-150°، ورك الركل 30-60°، جذع مائل للأمام قليلاً',
         'تمرير طويل': 'تمرير طويل (long pass). الزوايا المثالية: ركبة الدعم 140-160°، ورك مستقيم، جذع مائل للخلف عند التمرير',
-        'استلام': 'استلام الكرة (ball reception/control). الزوايا المثالية: ركب منخفضة 100-130° للتوازن، ورك منخفض، جذع مستقيم ومرن'
+        'استلام':     'استلام الكرة (ball reception/control). الزوايا المثالية: ركب منخفضة 100-130° للتوازن، ورك منخفض، جذع مستقيم ومرن'
     }.get(skill, '')
 
-    prompt = f"""أنت محلل تقني متخصص في كرة القدم. قم بتحليل زوايا جسم اللاعب التالية لمهارة: {skill}
+    prompt = f"""أنت محلل تقني متخصص في كرة القدم. قم بتحليل وضعية اللاعب في الصورة لمهارة: {skill}
 
 السياق التقني: {skill_context}
 
-زوايا المفاصل المرصودة:
+زوايا المفاصل المحسوبة تلقائياً:
 • ركبة يمين: {angles.get('rightKnee', 'غير متوفر')}°
 • ركبة يسار: {angles.get('leftKnee', 'غير متوفر')}°
 • ورك يمين: {angles.get('rightHip', 'غير متوفر')}°
 • ورك يسار: {angles.get('leftHip', 'غير متوفر')}°
 • الجذع: {angles.get('trunk', 'غير متوفر')}°
 
-قدم تحليلاً شاملاً باللغة العربية يشمل:
+استخدم الصورة والزوايا معاً لتقديم تحليل شامل باللغة العربية يشمل:
 
 **1. التقييم العام**
 تقييم عام للوضعية مع درجة من 10
 
 **2. نقاط القوة ✅**
-ما يقوم به اللاعب بشكل صحيح
+ما يقوم به اللاعب بشكل صحيح (استند للصورة والزوايا)
 
 **3. نقاط التحسين ⚠️**
 المفاصل التي تحتاج تعديل وكيفية التعديل
@@ -137,6 +153,16 @@ def claude_analyze():
     if not CLAUDE_API_KEY:
         return jsonify({'error': 'مفتاح API غير مضبوط — أضف CLAUDE_API_KEY في إعدادات Railway'}), 500
 
+    # بناء المحتوى — صورة + نص إذا توفرت الصورة
+    if image_b64:
+        resized = resize_for_claude(image_b64)
+        message_content = [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": resized}},
+            {"type": "text",  "text": prompt}
+        ]
+    else:
+        message_content = prompt
+
     try:
         response = http_requests.post(
             'https://api.anthropic.com/v1/messages',
@@ -148,7 +174,7 @@ def claude_analyze():
             json={
                 'model': 'claude-opus-4-5',
                 'max_tokens': 1500,
-                'messages': [{'role': 'user', 'content': prompt}]
+                'messages': [{'role': 'user', 'content': message_content}]
             },
             timeout=30
         )
@@ -373,43 +399,52 @@ def claude_video():
     followthrough = phases.get('followthrough', {})
 
     prompt = f"""أنت محلل تقني متخصص في كرة القدم. قم بتحليل حركة اللاعب الكاملة لمهارة: {skill}
+انظر إلى الصور الثلاث المرفقة (التحضير، الملامسة، المتابعة) واستخدمها مع الزوايا المحسوبة للتحليل.
 
 السياق التقني: {skill_context}
 
-تم رصد زوايا الجسم في ثلاث مراحل زمنية متتالية:
+زوايا الجسم في كل مرحلة:
 
-🏃 مرحلة التحضير (الثانية {prep.get('time', '—')}):
-{angles_text(prep)}
-
-⚽ مرحلة الملامسة (الثانية {contact.get('time', '—')}):
-{angles_text(contact)}
-
-🎯 مرحلة المتابعة (الثانية {followthrough.get('time', '—')}):
-{angles_text(followthrough)}
+🏃 التحضير (الثانية {prep.get('time', '—')}): {angles_text(prep)}
+⚽ الملامسة (الثانية {contact.get('time', '—')}): {angles_text(contact)}
+🎯 المتابعة (الثانية {followthrough.get('time', '—')}): {angles_text(followthrough)}
 
 قدم تحليلاً شاملاً للحركة الكاملة باللغة العربية يشمل:
 
 **1. التقييم العام للحركة الكاملة**
-تقييم عام للحركة من التحضير إلى المتابعة مع درجة من 10
+تقييم عام مع درجة من 10
 
-**2. تحليل كل مرحلة**
+**2. تحليل كل مرحلة** (استند للصور والزوايا)
 • التحضير: ما هو صحيح وما يحتاج تعديل
 • الملامسة: جودة وضعية اللحظة الحاسمة
 • المتابعة: اكتمال الحركة والتوازن
 
 **3. نقاط القوة ✅**
-أبرز ما يقوم به اللاعب بشكل صحيح عبر الحركة كاملة
+أبرز ما يقوم به اللاعب بشكل صحيح
 
 **4. نقاط التحسين ⚠️**
-المفاصل والمراحل التي تحتاج تعديلاً مع وصف دقيق
+المراحل والمفاصل التي تحتاج تعديلاً مع وصف دقيق
 
 **5. تمارين مقترحة 🏋️**
-3 تمارين عملية تستهدف تحسين تسلسل الحركة وتدفقها
+3 تمارين عملية لتحسين تسلسل الحركة
 
 اجعل التحليل واضحاً ومفيداً للاعب أو المدرب."""
 
     if not CLAUDE_API_KEY:
         return jsonify({'error': 'مفتاح API غير مضبوط — أضف CLAUDE_API_KEY في إعدادات Railway'}), 500
+
+    # بناء المحتوى — صور المراحل الثلاث + النص
+    message_content = []
+    for phase_key, label in [('preparation','التحضير'), ('contact','الملامسة'), ('followthrough','المتابعة')]:
+        ph = phases.get(phase_key, {})
+        thumb = ph.get('thumbnail')
+        if thumb:
+            message_content.append({"type": "text", "text": f"صورة مرحلة {label}:"})
+            message_content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": thumb}
+            })
+    message_content.append({"type": "text", "text": prompt})
 
     try:
         response = http_requests.post(
@@ -422,9 +457,9 @@ def claude_video():
             json={
                 'model': 'claude-opus-4-5',
                 'max_tokens': 2000,
-                'messages': [{'role': 'user', 'content': prompt}]
+                'messages': [{'role': 'user', 'content': message_content}]
             },
-            timeout=45
+            timeout=60
         )
         result = response.json()
         if 'content' in result:

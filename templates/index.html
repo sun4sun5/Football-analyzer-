@@ -726,13 +726,13 @@
         return;
       }
 
-      updateLoading('🤖 جارٍ تحليل النتائج بالذكاء الاصطناعي...', 'Claude يحلل زوايا جسمك');
+      updateLoading('🤖 جارٍ تحليل النتائج بالذكاء الاصطناعي...', 'Claude يرى الصورة ويحلل الزوايا');
 
-      // Step 2: Claude Analysis
+      // Step 2: Claude Analysis (مع الصورة لتحليل بصري أدق)
       const claudeRes = await fetch('/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ angles: analyzeData.angles, skill: selectedSkill })
+        body: JSON.stringify({ angles: analyzeData.angles, skill: selectedSkill, image: imageBase64 })
       });
       const claudeData = await claudeRes.json();
 
