@@ -1,5 +1,7 @@
 import os
-from flask import Flask, request, jsonify
+import tempfile
+import requests as http_requests
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import mediapipe as mp
 import numpy as np
@@ -8,11 +10,14 @@ import base64
 
 app = Flask(__name__)
 CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024  # 200MB max video
 mp_pose = mp.solutions.pose
+
+CLAUDE_API_KEY = os.environ.get('CLAUDE_API_KEY', '')
 
 @app.route('/')
 def home():
-    return 'السيرفر يعمل ✅'
+    return render_template('index.html')
 
 def calculate_angle(a, b, c):
     a, b, c = np.array(a), np.array(b), np.array(c)
@@ -43,6 +48,148 @@ def analyze():
         }
         return jsonify({'angles': angles})
 
+@app.route('/claude', methods=['POST'])
+def claude_analyze():
+    data = request.json
+    angles = data.get('angles', {})
+    skill = data.get('skill', 'تسديدة')
+
+    skill_context = {
+        'تسديدة': 'ركلة تسديدة على المرمى (shooting). الزوايا المثالية: ركبة الركل 120-150°، ورك الركل 30-60°، جذع مائل للأمام قليلاً',
+        'تمرير طويل': 'تمرير طويل (long pass). الزوايا المثالية: ركبة الدعم 140-160°، ورك مستقيم، جذع مائل للخلف عند التمرير',
+        'استلام': 'استلام الكرة (ball reception/control). الزوايا المثالية: ركب منخفضة 100-130° للتوازن، ورك منخفض، جذع مستقيم ومرن'
+    }.get(skill, '')
+
+    prompt = f"""أنت محلل تقني متخصص في كرة القدم. قم بتحليل زوايا جسم اللاعب التالية لمهارة: {skill}
+
+السياق التقني: {skill_context}
+
+زوايا المفاصل المرصودة:
+• ركبة يمين: {angles.get('rightKnee', 'غير متوفر')}°
+• ركبة يسار: {angles.get('leftKnee', 'غير متوفر')}°
+• ورك يمين: {angles.get('rightHip', 'غير متوفر')}°
+• ورك يسار: {angles.get('leftHip', 'غير متوفر')}°
+• الجذع: {angles.get('trunk', 'غير متوفر')}°
+
+قدم تحليلاً شاملاً باللغة العربية يشمل:
+
+**1. التقييم العام**
+تقييم عام للوضعية مع درجة من 10
+
+**2. نقاط القوة ✅**
+ما يقوم به اللاعب بشكل صحيح
+
+**3. نقاط التحسين ⚠️**
+المفاصل التي تحتاج تعديل وكيفية التعديل
+
+**4. تمارين مقترحة 🏋️**
+3 تمارين عملية لتحسين الأداء
+
+اجعل التحليل واضحاً ومفيداً للاعب أو المدرب."""
+
+    try:
+        response = http_requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': CLAUDE_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            json={
+                'model': 'claude-opus-4-6',
+                'max_tokens': 1500,
+                'messages': [{'role': 'user', 'content': prompt}]
+            },
+            timeout=30
+        )
+        result = response.json()
+        if 'content' in result:
+            return jsonify({'analysis': result['content'][0]['text']})
+        else:
+            return jsonify({'error': 'خطأ في استجابة Claude', 'details': str(result)}), 500
+    except Exception as e:
+        return jsonify({'error': f'خطأ في الاتصال بـ Claude: {str(e)}'}), 500
+
+@app.route('/detect-kick', methods=['POST'])
+def detect_kick():
+    if 'video' not in request.files:
+        return jsonify({'error': 'لم يتم إرسال فيديو'}), 400
+
+    video_file = request.files['video']
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
+            video_file.save(tmp.name)
+            tmp_path = tmp.name
+
+        cap = cv2.VideoCapture(tmp_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        min_dist = float('inf')
+        best_time = 0.0
+        ball_found = False
+
+        # Sample every 3rd frame for speed
+        step = max(1, round(fps / 10))  # ~10 checks per second
+
+        with mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.4) as pose:
+            frame_num = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_num % step != 0:
+                    frame_num += 1
+                    continue
+
+                time_sec = frame_num / fps
+                h, w = frame.shape[:2]
+
+                # Ball detection via HoughCircles
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                gray_blur = cv2.GaussianBlur(gray, (9, 9), 2)
+                circles = cv2.HoughCircles(
+                    gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=40,
+                    param1=60, param2=28, minRadius=8, maxRadius=min(w, h) // 6
+                )
+
+                if circles is not None:
+                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = pose.process(img_rgb)
+
+                    if results.pose_landmarks:
+                        lm = results.pose_landmarks.landmark
+                        # Use ankles + foot index landmarks as foot points
+                        foot_indices = [27, 28, 29, 30, 31, 32]
+                        foot_points = [(lm[i].x * w, lm[i].y * h)
+                                       for i in foot_indices if lm[i].visibility > 0.3]
+
+                        if foot_points:
+                            circles_arr = np.round(circles[0]).astype(int)
+                            for (bx, by, br) in circles_arr:
+                                for (fx, fy) in foot_points:
+                                    dist = np.hypot(bx - fx, by - fy) - br
+                                    if dist < min_dist:
+                                        min_dist = dist
+                                        best_time = time_sec
+                                        ball_found = True
+
+                frame_num += 1
+
+        cap.release()
+
+        if not ball_found:
+            return jsonify({'error': 'لم يتم اكتشاف الكرة في الفيديو'})
+
+        return jsonify({'kick_time': round(best_time, 1)})
+
+    except Exception as e:
+        return jsonify({'error': f'خطأ في المعالجة: {str(e)}'}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
