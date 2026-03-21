@@ -433,17 +433,17 @@ def claude_video():
     if not CLAUDE_API_KEY:
         return jsonify({'error': 'مفتاح API غير مضبوط — أضف CLAUDE_API_KEY في إعدادات Railway'}), 500
 
-    # بناء المحتوى — صور المراحل الثلاث + النص
+    # بناء المحتوى — صورة الملامسة فقط + النص (لتجنب timeout)
     message_content = []
-    for phase_key, label in [('preparation','التحضير'), ('contact','الملامسة'), ('followthrough','المتابعة')]:
-        ph = phases.get(phase_key, {})
-        thumb = ph.get('thumbnail')
-        if thumb:
-            message_content.append({"type": "text", "text": f"صورة مرحلة {label}:"})
-            message_content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": thumb}
-            })
+    contact_thumb = phases.get('contact', {}).get('thumbnail') or \
+                    phases.get('preparation', {}).get('thumbnail') or \
+                    phases.get('followthrough', {}).get('thumbnail')
+    if contact_thumb:
+        message_content.append({"type": "text", "text": "صورة لحظة الملامسة:"})
+        message_content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": contact_thumb}
+        })
     message_content.append({"type": "text", "text": prompt})
 
     try:
@@ -459,7 +459,7 @@ def claude_video():
                 'max_tokens': 2000,
                 'messages': [{'role': 'user', 'content': message_content}]
             },
-            timeout=60
+            timeout=90
         )
         result = response.json()
         if 'content' in result:
