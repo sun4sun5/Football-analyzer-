@@ -203,11 +203,10 @@ def detect_kick():
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        min_dist = float('inf')
         best_time = 0.0
         ball_found = False
-
         step = max(1, round(fps / 20))
+        foot_positions = {}
 
         with mp_pose.Pose(static_image_mode=False, model_complexity=1,
                           min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
@@ -216,43 +215,34 @@ def detect_kick():
                 ret, frame = cap.read()
                 if not ret:
                     break
-                if frame_num % step != 0:
-                    frame_num += 1
-                    continue
-
-                time_sec = frame_num / fps
-                h, w = frame.shape[:2]
-
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray_blur = cv2.GaussianBlur(gray, (9, 9), 2)
-                circles = cv2.HoughCircles(
-                    gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=40,
-                    param1=60, param2=28, minRadius=8, maxRadius=min(w, h) // 6
-                )
-
-                if circles is not None:
-                    frame_up = cv2.resize(frame, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-                    img_rgb = cv2.cvtColor(frame_up, cv2.COLOR_BGR2RGB)
+                if frame_num % step == 0:
+                    h, w = frame.shape[:2]
+                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     results = pose.process(img_rgb)
-                    circles = circles * 2 if circles is not None else circles
-
                     if results.pose_landmarks:
                         lm = results.pose_landmarks.landmark
-                        foot_indices = [27, 28, 29, 30, 31, 32]
-                        foot_points = [(lm[i].x * w * 2, lm[i].y * h * 2)
-                                       for i in foot_indices if lm[i].visibility > 0.1]
-
-                        if foot_points:
-                            circles_arr = np.round(circles[0]).astype(int)
-                            for (bx, by, br) in circles_arr:
-                                for (fx, fy) in foot_points:
-                                    dist = np.hypot(bx - fx, by - fy) - br
-                                    if dist < min_dist:
-                                        min_dist = dist
-                                        best_time = time_sec
-                                        ball_found = True
-
+                        ankles = []
+                        for idx in [27, 28]:
+                            if lm[idx].visibility > 0.2:
+                                ankles.append((lm[idx].x * w, lm[idx].y * h, lm[idx].visibility))
+                        if ankles:
+                            ax, ay, _ = max(ankles, key=lambda a: a[2])
+                            foot_positions[frame_num] = (ax, ay)
                 frame_num += 1
+
+        if len(foot_positions) >= 3:
+            sorted_frames = sorted(foot_positions.keys())
+            max_speed = 0.0
+            for i in range(1, len(sorted_frames) - 1):
+                f_prev, f_curr, f_next = sorted_frames[i-1], sorted_frames[i], sorted_frames[i+1]
+                px, py = foot_positions[f_prev]
+                cx, cy = foot_positions[f_curr]
+                nx, ny = foot_positions[f_next]
+                speed = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
+                if speed > max_speed:
+                    max_speed = speed
+                    best_time = f_curr / fps
+                    ball_found = True
 
         cap.release()
 
@@ -284,10 +274,9 @@ def analyze_video():
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # ── Step 1: Find contact frame ──
-        # Track all candidate frames: {frame_num: (ball_x, ball_y, ball_r, dist)}
-        candidates = {}
+        # ── Step 1: Find contact frame using foot velocity (peak = ball contact) ──
         step = max(1, round(fps / 20))
+        foot_positions = {}  # frame_num -> (ankle_x, ankle_y)
 
         with mp_pose.Pose(static_image_mode=False, model_complexity=1,
                           min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
@@ -298,33 +287,19 @@ def analyze_video():
                     break
                 if frame_num % step == 0:
                     h, w = frame.shape[:2]
-                    # Only search lower 70% of frame (ball near feet)
-                    roi = frame[int(h * 0.3):, :]
-                    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-                    gray_blur = cv2.GaussianBlur(gray, (9, 9), 2)
-                    circles = cv2.HoughCircles(
-                        gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=40,
-                        param1=60, param2=28, minRadius=8, maxRadius=min(w, h) // 6
-                    )
-                    if circles is not None:
-                        frame_up = cv2.resize(frame, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-                        img_rgb = cv2.cvtColor(frame_up, cv2.COLOR_BGR2RGB)
-                        results = pose.process(img_rgb)
-                        if results.pose_landmarks:
-                            lm = results.pose_landmarks.landmark
-                            foot_indices = [27, 28, 29, 30, 31, 32]
-                            foot_points = [(lm[i].x * w, lm[i].y * h)
-                                           for i in foot_indices if lm[i].visibility > 0.1]
-                            if foot_points:
-                                # Adjust circle y coords for ROI offset
-                                offset_y = int(h * 0.3)
-                                circles_arr = np.round(circles[0]).astype(int)
-                                for (bx, by, br) in circles_arr:
-                                    real_by = by + offset_y
-                                    for (fx, fy) in foot_points:
-                                        dist = np.hypot(bx - fx, real_by - fy) - br
-                                        if frame_num not in candidates or dist < candidates[frame_num][3]:
-                                            candidates[frame_num] = (bx, real_by, br, dist)
+                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = pose.process(img_rgb)
+                    if results.pose_landmarks:
+                        lm = results.pose_landmarks.landmark
+                        # Track both ankles, pick the more visible one
+                        ankles = []
+                        for idx in [27, 28]:  # left ankle, right ankle
+                            if lm[idx].visibility > 0.2:
+                                ankles.append((lm[idx].x * w, lm[idx].y * h, lm[idx].visibility))
+                        if ankles:
+                            # Pick ankle with highest visibility
+                            ax, ay, _ = max(ankles, key=lambda a: a[2])
+                            foot_positions[frame_num] = (ax, ay)
                 frame_num += 1
 
         cap.release()
@@ -332,29 +307,22 @@ def analyze_video():
         ball_found = False
         contact_frame_num = total_frames // 2
 
-        if candidates:
-            # Find frame with min ball-foot distance
-            best_frame = min(candidates, key=lambda f: candidates[f][3])
-            best_dist = candidates[best_frame][3]
-
-            # Verify: check if ball moves away in subsequent frames (real kick)
-            # A real kick = ball position shifts significantly in frames after contact
-            sorted_frames = sorted(candidates.keys())
-            best_idx = sorted_frames.index(best_frame) if best_frame in sorted_frames else 0
-
-            verified = False
-            if best_idx + 2 < len(sorted_frames):
-                bx, by, br, _ = candidates[best_frame]
-                next_frames = sorted_frames[best_idx + 1: best_idx + 4]
-                for nf in next_frames:
-                    nbx, nby, nbr, _ = candidates[nf]
-                    ball_moved = np.hypot(nbx - bx, nby - by)
-                    if ball_moved > br * 1.5:  # Ball moved more than 1.5x its radius
-                        verified = True
-                        break
-
-            contact_frame_num = best_frame
-            ball_found = True
+        if len(foot_positions) >= 3:
+            sorted_frames = sorted(foot_positions.keys())
+            max_speed = 0.0
+            for i in range(1, len(sorted_frames) - 1):
+                f_prev = sorted_frames[i - 1]
+                f_curr = sorted_frames[i]
+                f_next = sorted_frames[i + 1]
+                px, py = foot_positions[f_prev]
+                cx, cy = foot_positions[f_curr]
+                nx, ny = foot_positions[f_next]
+                # Speed = average displacement around current frame
+                speed = (np.hypot(cx - px, cy - py) + np.hypot(nx - cx, ny - cy)) / 2
+                if speed > max_speed:
+                    max_speed = speed
+                    contact_frame_num = f_curr
+                    ball_found = True
 
         # ── Step 2: Define 3 phase frame numbers ──
         prep_frame_num    = max(0, contact_frame_num - int(fps * 1.0))
