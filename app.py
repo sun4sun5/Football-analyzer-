@@ -289,14 +289,57 @@ def analyze_video():
         if contact_time is not None:
             contact_frame_num = int(float(contact_time) * fps)
             contact_frame_num = max(0, min(total_frames - 1, contact_frame_num))
-            ball_found = True
         else:
             contact_frame_num = total_frames // 2
-            ball_found = False
 
-        # ── Step 2: Define 3 phase frame numbers (based on research) ──
-        prep_frame_num    = max(0, contact_frame_num - int(fps * 1.0))
-        follow_frame_num  = min(total_frames - 1, contact_frame_num + int(fps * 0.5))
+        # ── Step 2: Find prep & follow frames using biomechanics (pose-based) ──
+        # Preparation = frame with MAX knee flexion (smallest angle) in window before contact
+        # Follow-through = frame with MIN knee flexion (largest angle) in window after contact
+        prep_window_start  = max(0, contact_frame_num - int(fps * 1.5))
+        prep_window_end    = max(0, contact_frame_num - int(fps * 0.1))
+        follow_window_start = min(total_frames - 1, contact_frame_num + int(fps * 0.1))
+        follow_window_end   = min(total_frames - 1, contact_frame_num + int(fps * 1.0))
+
+        step = max(1, round(fps / 15))
+        knee_data = {}  # frame_num -> min_knee_angle
+
+        with mp_pose.Pose(static_image_mode=False, model_complexity=1,
+                          min_detection_confidence=0.15, min_tracking_confidence=0.1) as pose:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, prep_window_start)
+            frame_num = prep_window_start
+            while frame_num <= follow_window_end:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_num % step == 0:
+                    h, w = frame.shape[:2]
+                    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    results = pose.process(img_rgb)
+                    if results.pose_landmarks:
+                        lm = results.pose_landmarks.landmark
+                        def p(i): return [lm[i].x, lm[i].y]
+                        rk = calculate_angle(p(24), p(26), p(28))
+                        lk = calculate_angle(p(23), p(25), p(27))
+                        knee_data[frame_num] = min(rk, lk)
+                frame_num += 1
+
+        cap.release()
+
+        # Preparation: frame with smallest knee angle (max backswing) in prep window
+        prep_candidates = {f: a for f, a in knee_data.items() if prep_window_start <= f <= prep_window_end}
+        if prep_candidates:
+            prep_frame_num = min(prep_candidates, key=prep_candidates.get)
+        else:
+            prep_frame_num = max(0, contact_frame_num - int(fps * 0.4))
+
+        # Follow-through: frame with largest knee angle (max extension) in follow window
+        follow_candidates = {f: a for f, a in knee_data.items() if follow_window_start <= f <= follow_window_end}
+        if follow_candidates:
+            follow_frame_num = max(follow_candidates, key=follow_candidates.get)
+        else:
+            follow_frame_num = min(total_frames - 1, contact_frame_num + int(fps * 0.4))
+
+        ball_found = True
 
         # ── Step 3: Seek to each phase and analyze ──
         cap = cv2.VideoCapture(tmp_path)
