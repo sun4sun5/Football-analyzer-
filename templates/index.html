@@ -342,6 +342,63 @@
       background: var(--border);
       margin: 6px 0 20px;
     }
+
+    /* ─── VIDEO FULL ANALYSIS BUTTON ─── */
+    .btn-video {
+      background: linear-gradient(135deg, #7c4dff, #512da8);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(124,77,255,0.35);
+    }
+    .btn-video:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(124,77,255,0.45); }
+    .btn-video:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* ─── PHASES GRID ─── */
+    .phases-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .phase-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .phase-header {
+      padding: 8px 10px;
+      font-size: 0.82rem;
+      font-weight: 700;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .phase-prep   { background: rgba(33,150,243,0.15); color: #64b5f6; }
+    .phase-contact{ background: rgba(0,200,83,0.15);   color: var(--green-light); }
+    .phase-follow { background: rgba(255,152,0,0.15);  color: #ffb74d; }
+
+    .phase-thumbnail {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      display: block;
+    }
+    .phase-angles {
+      padding: 8px 10px;
+    }
+    .phase-angle-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .phase-angle-row:last-child { border-bottom: none; }
+    .phase-angle-name { color: var(--text-muted); }
+    .phase-angle-val  { color: var(--green); font-weight: 700; }
+
+    @media (max-width: 560px) {
+      .phases-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
@@ -417,8 +474,11 @@
       </div>
 
       <div class="preview-actions">
-        <button class="btn btn-primary" onclick="startAnalysis()">
-          🔍 تحليل الآن
+        <button class="btn btn-primary" id="btn-analyze-frame" onclick="startAnalysis()">
+          🔍 تحليل الفريم
+        </button>
+        <button class="btn btn-video" id="btn-analyze-video" onclick="analyzeFullVideo()" style="display:none;">
+          🎬 تحليل الفيديو كاملاً
         </button>
         <button class="btn btn-outline" onclick="resetAll()">
           🗑️ حذف
@@ -451,6 +511,31 @@
     <!-- Retry -->
     <button class="btn btn-outline btn-full" onclick="resetAll()" style="margin-top:8px;">
       🔄 تحليل صورة جديدة
+    </button>
+  </div>
+
+  <!-- VIDEO FULL ANALYSIS RESULTS -->
+  <div id="video-results-section" style="display:none; flex-direction:column; gap:16px;">
+
+    <div class="card">
+      <div class="card-title">
+        <div class="icon">🎬</div>
+        تحليل الحركة الكاملة — ثلاث مراحل
+      </div>
+      <div class="phases-grid" id="phases-grid"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <div class="icon">🤖</div>
+        التحليل الشامل بالذكاء الاصطناعي
+      </div>
+      <div class="divider"></div>
+      <div class="analysis-box" id="video-analysis-text"></div>
+    </div>
+
+    <button class="btn btn-outline btn-full" onclick="resetAll()">
+      🔄 تحليل فيديو جديد
     </button>
   </div>
 
@@ -519,6 +604,7 @@
       videoEl.style.display = 'block';
       document.getElementById('preview-img').style.display = 'none';
       document.getElementById('video-controls').style.display = 'block';
+      document.getElementById('btn-analyze-video').style.display = 'inline-flex';
 
       videoEl.onloadedmetadata = () => {
         document.getElementById('frame-slider').max = videoEl.duration;
@@ -706,11 +792,105 @@
     document.getElementById('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // ── ANALYZE FULL VIDEO (3 phases) ──
+  async function analyzeFullVideo() {
+    if (!currentVideoFile) { showToast('لا يوجد فيديو محدد', 'error'); return; }
+
+    showLoading('🎬 جارٍ تحليل الفيديو الكامل...', 'يتم مسح جميع المراحل');
+
+    const formData = new FormData();
+    formData.append('video', currentVideoFile);
+
+    try {
+      const res = await fetch('/analyze-video', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.error) {
+        hideLoading();
+        showToast('⚠️ ' + data.error, 'error');
+        return;
+      }
+
+      updateLoading('🤖 جارٍ التحليل الشامل بالذكاء الاصطناعي...', 'Claude يحلل الحركة الكاملة');
+
+      const claudeRes = await fetch('/claude-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phases: data.phases, skill: selectedSkill })
+      });
+      const claudeData = await claudeRes.json();
+
+      hideLoading();
+
+      if (claudeData.error) {
+        showToast('خطأ في Claude: ' + claudeData.error, 'error');
+        return;
+      }
+
+      showVideoResults(data.phases, claudeData.analysis);
+      showToast('✅ تم تحليل الفيديو الكامل!', 'success');
+
+    } catch (err) {
+      hideLoading();
+      showToast('❌ خطأ في الاتصال: ' + err.message, 'error');
+    }
+  }
+
+  // ── SHOW VIDEO RESULTS ──
+  function showVideoResults(phases, analysis) {
+    const angleLabels = {
+      rightKnee: 'ركبة يمين', leftKnee: 'ركبة يسار',
+      rightHip: 'ورك يمين', leftHip: 'ورك يسار', trunk: 'الجذع'
+    };
+    const phaseOrder = [
+      { key: 'preparation',  cls: 'phase-prep',    emoji: '🏃' },
+      { key: 'contact',      cls: 'phase-contact',  emoji: '⚽' },
+      { key: 'followthrough',cls: 'phase-follow',   emoji: '🎯' }
+    ];
+
+    const grid = document.getElementById('phases-grid');
+    grid.innerHTML = '';
+
+    phaseOrder.forEach(({ key, cls, emoji }) => {
+      const ph = phases[key];
+      if (!ph) return;
+      const anglesHTML = Object.entries(ph.angles).map(([k, v]) =>
+        `<div class="phase-angle-row">
+           <span class="phase-angle-name">${angleLabels[k] || k}</span>
+           <span class="phase-angle-val">${v}°</span>
+         </div>`
+      ).join('');
+
+      grid.innerHTML += `
+        <div class="phase-card">
+          <div class="phase-header ${cls}">${emoji} ${ph.name} — ${ph.time}ث</div>
+          <img class="phase-thumbnail" src="data:image/jpeg;base64,${ph.thumbnail}" alt="${ph.name}" />
+          <div class="phase-angles">${anglesHTML}</div>
+        </div>`;
+    });
+
+    const formatted = analysis
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/^### (.+)$/gm, '<h3 style="color:var(--accent);margin:12px 0 6px;">$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2 style="color:var(--green-light);margin:14px 0 6px;font-size:1rem;">$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1 style="color:var(--green-light);margin:14px 0 8px;font-size:1.1rem;">$1</h1>')
+      .replace(/\n/g, '<br>');
+
+    document.getElementById('video-analysis-text').innerHTML = formatted;
+    const sec = document.getElementById('video-results-section');
+    sec.style.display = 'flex';
+    sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   // ── RESET ──
   function resetResults() {
     document.getElementById('results-section').style.display = 'none';
     document.getElementById('angles-grid').innerHTML = '';
     document.getElementById('analysis-text').innerHTML = '';
+    document.getElementById('video-results-section').style.display = 'none';
+    document.getElementById('phases-grid').innerHTML = '';
+    document.getElementById('video-analysis-text').innerHTML = '';
   }
 
   function resetAll() {
@@ -728,6 +908,7 @@
     document.getElementById('preview-video').style.display = 'none';
     document.getElementById('preview-video').src = '';
     document.getElementById('video-controls').style.display = 'none';
+    document.getElementById('btn-analyze-video').style.display = 'none';
     document.getElementById('file-input').value = '';
   }
 
