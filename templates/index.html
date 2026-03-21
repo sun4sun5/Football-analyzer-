@@ -578,18 +578,38 @@
   // ── SEEK VIDEO ──
   function seekVideo(time) {
     if (!videoEl) return;
-    videoEl.currentTime = time;
+    videoEl.pause();
+    videoEl.currentTime = parseFloat(time);
     document.getElementById('frame-time').textContent = `اللحظة: ${parseFloat(time).toFixed(1)} ثانية`;
   }
 
   // ── CAPTURE VIDEO FRAME ──
   function captureVideoFrame() {
-    const canvas = document.getElementById('canvas-hidden');
-    canvas.width = videoEl.videoWidth;
-    canvas.height = videoEl.videoHeight;
-    canvas.getContext('2d').drawImage(videoEl, 0, 0);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-    return dataUrl.split(',')[1];
+    return new Promise((resolve) => {
+      const canvas = document.getElementById('canvas-hidden');
+      const doCapture = () => {
+        canvas.width = videoEl.videoWidth || 640;
+        canvas.height = videoEl.videoHeight || 360;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+        // Check if frame is not blank
+        const pixel = ctx.getImageData(canvas.width/2, canvas.height/2, 1, 1).data;
+        const isBlank = pixel[0] === 0 && pixel[1] === 0 && pixel[2] === 0;
+        if (isBlank) {
+          // Retry after short delay
+          setTimeout(doCapture, 150);
+          return;
+        }
+        resolve(canvas.toDataURL('image/jpeg', 0.95).split(',')[1]);
+      };
+
+      if (videoEl.readyState >= 2) {
+        doCapture();
+      } else {
+        videoEl.addEventListener('seeked', doCapture, { once: true });
+        videoEl.currentTime = videoEl.currentTime; // trigger seeked
+      }
+    });
   }
 
   // ── START ANALYSIS ──
@@ -599,7 +619,8 @@
 
     let imageBase64 = capturedImageBase64;
     if (mediaType === 'video') {
-      imageBase64 = captureVideoFrame();
+      showLoading('📸 جارٍ التقاط الفريم...', 'يرجى الانتظار');
+      imageBase64 = await captureVideoFrame();
     }
 
     showLoading('🔍 جارٍ تحليل وضعية الجسم...', 'MediaPipe يرصد نقاط الجسم');
