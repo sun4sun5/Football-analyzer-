@@ -6,3 +6,4 @@ opencv-python
 numpy
 requests
 google-genai
+ultralytics

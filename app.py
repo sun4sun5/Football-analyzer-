@@ -11,6 +11,7 @@ import cv2
 import base64
 from google import genai
 from google.genai import types as genai_types
+from ultralytics import YOLO
 
 app = Flask(__name__)
 CORS(app)
@@ -20,6 +21,12 @@ mp_pose = mp.solutions.pose
 CLAUDE_API_KEY = os.environ.get('CLAUDE_API_KEY', '')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 gemini_client  = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+# Load YOLO model once at startup (nano = fast + small)
+try:
+    yolo_model = YOLO('yolov8n.pt')  # downloads automatically on first run
+except Exception:
+    yolo_model = None
 
 @app.route('/')
 def home():
@@ -320,31 +327,62 @@ def analyze_video():
                             best_frame_data = (frame.copy(), r, score, fn)
                 fn += 1
 
-        # ── Find contact frame (ankle velocity peak in first 85%) ──
+        # ── Find contact frame using YOLO ball tracking ──
         contact_frame_num = total_frames // 2
-        search_limit = int(total_frames * 0.85)
-        if len(ankle_pos) >= 3:
-            frames = sorted(ankle_pos.keys())
-            speeds = {}
-            for i in range(1, len(frames)-1):
-                fp, fc, fn2 = frames[i-1], frames[i], frames[i+1]
-                if fc > search_limit:
+
+        if yolo_model is not None:
+            # Track ball positions across frames
+            ball_positions = {}  # frame -> (cx, cy, area)
+            cap_yolo = cv2.VideoCapture(tmp_path)
+            fn = 0
+            step_y = max(1, round(fps / 15))
+            while True:
+                ret, frame = cap_yolo.read()
+                if not ret:
                     break
-                px,py = ankle_pos[fp]; cx,cy = ankle_pos[fc]; nx,ny = ankle_pos[fn2]
-                speeds[fc] = (np.hypot(cx-px,cy-py) + np.hypot(nx-cx,ny-cy)) / 2
-            if speeds:
-                max_spd = max(speeds.values())
-                threshold = max_spd * 0.65
-                for i in range(1, len(sorted(speeds.keys()))-1):
-                    sf = sorted(speeds.keys())
-                    fp,fc,fn2 = sf[i-1],sf[i],sf[i+1]
-                    if speeds[fc] >= threshold and speeds[fc] > speeds.get(fp,0) and speeds[fc] > speeds.get(fn2,0):
-                        # Contact happens ~0.15s BEFORE velocity peak
-                        contact_frame_num = max(0, fc - int(fps * 0.15))
-                        break
-                else:
+                if fn % step_y == 0 and fn < int(total_frames * 0.9):
+                    results = yolo_model(frame, classes=[32], verbose=False)  # class 32 = sports ball
+                    if results and results[0].boxes is not None and len(results[0].boxes):
+                        boxes = results[0].boxes.xywh.cpu().numpy()
+                        # Pick largest detected ball
+                        largest = max(boxes, key=lambda b: b[2]*b[3])
+                        ball_positions[fn] = (float(largest[0]), float(largest[1]), float(largest[2]*largest[3]))
+                fn += 1
+            cap_yolo.release()
+
+            # Find contact: frame where ball suddenly moves (velocity spike)
+            if len(ball_positions) >= 3:
+                bframes = sorted(ball_positions.keys())
+                ball_speeds = {}
+                for i in range(1, len(bframes)-1):
+                    fp, fc, fn2 = bframes[i-1], bframes[i], bframes[i+1]
+                    px,py,_ = ball_positions[fp]; cx,cy,_ = ball_positions[fc]; nx,ny,_ = ball_positions[fn2]
+                    ball_speeds[fc] = (np.hypot(cx-px,cy-py) + np.hypot(nx-cx,ny-cy)) / 2
+
+                if ball_speeds:
+                    max_spd = max(ball_speeds.values())
+                    threshold = max_spd * 0.6
+                    for i in range(1, len(bframes)-1):
+                        fp,fc,fn2 = bframes[i-1],bframes[i],bframes[i+1]
+                        if fc in ball_speeds and ball_speeds[fc] >= threshold and \
+                           ball_speeds[fc] > ball_speeds.get(fp,0):
+                            contact_frame_num = fc
+                            break
+
+        else:
+            # Fallback: ankle velocity
+            search_limit = int(total_frames * 0.85)
+            if len(ankle_pos) >= 3:
+                frames = sorted(ankle_pos.keys())
+                speeds = {}
+                for i in range(1, len(frames)-1):
+                    fp,fc,fn2 = frames[i-1],frames[i],frames[i+1]
+                    if fc > search_limit: break
+                    px,py=ankle_pos[fp]; cx,cy=ankle_pos[fc]; nx,ny=ankle_pos[fn2]
+                    speeds[fc] = (np.hypot(cx-px,cy-py)+np.hypot(nx-cx,ny-cy))/2
+                if speeds:
                     peak = max(speeds, key=speeds.get)
-                    contact_frame_num = max(0, peak - int(fps * 0.15))
+                    contact_frame_num = max(0, peak - int(fps*0.15))
 
         cap.release()
 
