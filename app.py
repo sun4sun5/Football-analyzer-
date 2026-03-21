@@ -339,10 +339,12 @@ def analyze_video():
                     sf = sorted(speeds.keys())
                     fp,fc,fn2 = sf[i-1],sf[i],sf[i+1]
                     if speeds[fc] >= threshold and speeds[fc] > speeds.get(fp,0) and speeds[fc] > speeds.get(fn2,0):
-                        contact_frame_num = fc
+                        # Contact happens ~0.15s BEFORE velocity peak
+                        contact_frame_num = max(0, fc - int(fps * 0.15))
                         break
                 else:
-                    contact_frame_num = max(speeds, key=speeds.get)
+                    peak = max(speeds, key=speeds.get)
+                    contact_frame_num = max(0, peak - int(fps * 0.15))
 
         cap.release()
 
