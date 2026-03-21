@@ -407,7 +407,11 @@
 
       <!-- Video controls -->
       <div id="video-controls">
-        <p class="frame-label">🎬 اختر اللحظة التي تريد تحليلها:</p>
+        <div id="kick-banner" style="display:none; background:rgba(0,200,83,0.12); border:1px solid var(--green); border-radius:10px; padding:10px 14px; margin-bottom:10px; font-size:0.88rem; color:var(--green-light); display:none; align-items:center; gap:8px;">
+          <span style="font-size:1.2rem;">⚽</span>
+          <span id="kick-banner-text"></span>
+        </div>
+        <p class="frame-label" id="frame-label-text">🎬 اختر اللحظة التي تريد تحليلها:</p>
         <input type="range" id="frame-slider" min="0" max="100" value="50" step="0.1" oninput="seekVideo(this.value)" />
         <p id="frame-time">اللحظة: 0.0 ثانية</p>
       </div>
@@ -467,6 +471,7 @@
   let capturedImageBase64 = null;
   let mediaType = null; // 'image' or 'video'
   let videoEl = null;
+  let currentVideoFile = null;
 
   // ── SKILL SELECT ──
   function selectSkill(btn) {
@@ -508,6 +513,7 @@
 
     } else if (file.type.startsWith('video/')) {
       mediaType = 'video';
+      currentVideoFile = file;
       videoEl = document.getElementById('preview-video');
       videoEl.src = url;
       videoEl.style.display = 'block';
@@ -518,10 +524,55 @@
         document.getElementById('frame-slider').max = videoEl.duration;
         document.getElementById('frame-slider').value = videoEl.duration / 2;
         seekVideo(videoEl.duration / 2);
+        // Auto-detect kick moment
+        autoDetectKick(file);
       };
     }
 
     document.getElementById('preview-section').style.display = 'block';
+  }
+
+  // ── AUTO DETECT KICK ──
+  async function autoDetectKick(file) {
+    const banner = document.getElementById('kick-banner');
+    const bannerText = document.getElementById('kick-banner-text');
+    const labelText = document.getElementById('frame-label-text');
+
+    banner.style.display = 'flex';
+    bannerText.textContent = 'جارٍ مسح الفيديو للكشف عن لحظة الملامسة...';
+    document.getElementById('frame-label-text').textContent = '🔍 يتم مسح الفريمات...';
+
+    const formData = new FormData();
+    formData.append('video', file);
+
+    try {
+      const res = await fetch('/detect-kick', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.error) {
+        banner.style.display = 'flex';
+        bannerText.textContent = '⚠️ ' + data.error + ' — اختر اللحظة يدوياً';
+        bannerText.style.color = 'var(--orange)';
+        labelText.textContent = '🎬 اختر اللحظة التي تريد تحليلها:';
+        return;
+      }
+
+      const t = data.kick_time;
+      const slider = document.getElementById('frame-slider');
+      slider.value = t;
+      seekVideo(t);
+
+      bannerText.textContent = `تم اكتشاف لحظة التسديد في الثانية ${t} ⚡`;
+      bannerText.style.color = 'var(--green-light)';
+      labelText.textContent = '🎬 تم تحديد اللحظة تلقائياً (يمكنك التعديل):';
+      showToast(`⚽ اكتشفنا لحظة الملامسة في الثانية ${t}`, 'success');
+
+    } catch (err) {
+      banner.style.display = 'flex';
+      bannerText.textContent = 'تعذّر الاكتشاف التلقائي — اختر اللحظة يدوياً';
+      bannerText.style.color = 'var(--orange)';
+      labelText.textContent = '🎬 اختر اللحظة التي تريد تحليلها:';
+    }
   }
 
   // ── SEEK VIDEO ──
@@ -646,6 +697,10 @@
     capturedImageBase64 = null;
     mediaType = null;
     videoEl = null;
+    currentVideoFile = null;
+    const banner = document.getElementById('kick-banner');
+    if (banner) banner.style.display = 'none';
+    document.getElementById('frame-label-text').textContent = '🎬 اختر اللحظة التي تريد تحليلها:';
     document.getElementById('preview-section').style.display = 'none';
     document.getElementById('preview-img').style.display = 'none';
     document.getElementById('preview-img').src = '';
