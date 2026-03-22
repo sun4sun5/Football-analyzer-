@@ -22,6 +22,12 @@ CLAUDE_API_KEY = os.environ.get('CLAUDE_API_KEY', '')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 gemini_client  = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
+SKILL_CONTEXT = {
+    'تسديدة':     'ركلة تسديدة (instep kick) — مصدر: Kellis & Katis 2007, Lees & Nolan 1998. الزوايا المثالية عند الملامسة: ركبة الركل 130-165° (امتداد قوي)، ركبة الدعم 138-154° (انحناء خفيف 26-42°)، ورك الركل 150-160° (انحناء أمامي 20-30°)، الجذع مائل للخلف 13-17° عن العمودي لتوليد القوة',
+    'تمرير طويل': 'تمرير طويل (lofted instep pass) — مصدر: Lees et al. 2010, Kellis & Katis 2007. الزوايا المثالية: ركبة الركل 130-160°، ركبة الدعم 138-154°، ورك الركل 150-160°، الجذع مائل للخلف 10-15° لرفع الكرة',
+    'استلام':     'استلام الكرة (ball reception/trapping) — مصدر: Nagasaki et al. ISBS, Lees & Nolan 1998. الزوايا المثالية: ركبة الاستلام 130-160° (انحناء 20-50° لامتصاص الكرة)، ركبة الدعم 150-165°، ورك الاستلام 140-160°، الجذع مائل للأمام 5-15°',
+}
+
 # Load YOLO model once at startup (nano = fast + small)
 try:
     yolo_model = YOLO('yolov8n.pt')  # downloads automatically on first run
@@ -404,14 +410,38 @@ def analyze_video():
                 best_frame = contact_frame
                 best_result = contact_result
 
-        angles = extract_angles(best_result)
-        thumbnail = frame_to_base64(best_frame)
+        # ── Extract 3 phases: preparation, contact, follow-through ──
+        prep_offset   = int(fps * 0.35)
+        follow_offset = int(fps * 0.35)
 
-        return jsonify({
-            'angles':       angles,
-            'thumbnail':    thumbnail,
-            'contact_time': round(contact_frame_num / fps, 1)
-        })
+        def get_phase_data(frame_num):
+            cap_p = cv2.VideoCapture(tmp_path)
+            cap_p.set(cv2.CAP_PROP_POS_FRAMES, max(0, frame_num))
+            ret_p, frm = cap_p.read()
+            cap_p.release()
+            if not ret_p:
+                return None
+            rgb = cv2.cvtColor(frm, cv2.COLOR_BGR2RGB)
+            res = try_detect(rgb)
+            if not res:
+                return None
+            return {'angles': extract_angles(res), 'thumbnail': frame_to_base64(frm)}
+
+        prep_num   = max(0, contact_frame_num - prep_offset)
+        follow_num = min(total_frames - 1, contact_frame_num + follow_offset)
+
+        prep_data   = get_phase_data(prep_num)
+        contact_data = {'angles': extract_angles(best_result), 'thumbnail': frame_to_base64(best_frame)}
+        follow_data = get_phase_data(follow_num)
+
+        phases = {}
+        if prep_data:
+            phases['preparation']   = {**prep_data,    'time': round(prep_num / fps, 1),   'name': 'التحضير'}
+        phases['contact']           = {**contact_data,  'time': round(contact_frame_num / fps, 1), 'name': 'الملامسة'}
+        if follow_data:
+            phases['followthrough'] = {**follow_data,  'time': round(follow_num / fps, 1), 'name': 'المتابعة'}
+
+        return jsonify({'phases': phases})
 
     except Exception as e:
         return jsonify({'error': f'خطأ في معالجة الفيديو: {str(e)}'}), 500
@@ -515,6 +545,143 @@ def claude_video():
             return jsonify({'error': f'خطأ من Claude API: {error_msg}'}), 500
     except Exception as e:
         return jsonify({'error': f'خطأ في الاتصال بـ Claude: {str(e)}'}), 500
+
+
+@app.route('/gemini', methods=['POST'])
+def gemini_analyze():
+    """Gemini alternative to /claude — image + angles → Arabic coaching analysis."""
+    if not gemini_client:
+        return jsonify({'error': 'مفتاح GEMINI_API_KEY غير مضبوط'}), 500
+
+    data      = request.json
+    angles    = data.get('angles', {})
+    skill     = data.get('skill', 'تسديدة')
+    image_b64 = data.get('image', None)
+
+    skill_context = SKILL_CONTEXT.get(skill, '')
+
+    prompt = f"""أنت محلل تقني متخصص في كرة القدم. قم بتحليل وضعية اللاعب في الصورة لمهارة: {skill}
+
+السياق التقني: {skill_context}
+
+زوايا المفاصل المحسوبة تلقائياً:
+• ركبة يمين: {angles.get('rightKnee', 'غير متوفر')}°
+• ركبة يسار: {angles.get('leftKnee', 'غير متوفر')}°
+• ورك يمين: {angles.get('rightHip', 'غير متوفر')}°
+• ورك يسار: {angles.get('leftHip', 'غير متوفر')}°
+• الجذع: {angles.get('trunk', 'غير متوفر')}°
+
+استخدم الصورة والزوايا معاً لتقديم تحليل شامل باللغة العربية يشمل:
+
+**1. التقييم العام**
+تقييم عام للوضعية مع درجة من 10
+
+**2. نقاط القوة ✅**
+ما يقوم به اللاعب بشكل صحيح (استند للصورة والزوايا)
+
+**3. نقاط التحسين ⚠️**
+المفاصل التي تحتاج تعديل وكيفية التعديل
+
+**4. تمارين مقترحة 🏋️**
+3 تمارين عملية لتحسين الأداء
+
+اجعل التحليل واضحاً ومفيداً للاعب أو المدرب."""
+
+    try:
+        parts = []
+        if image_b64:
+            resized   = resize_for_claude(image_b64)
+            img_bytes = base64.b64decode(resized)
+            parts.append(genai_types.Part.from_bytes(data=img_bytes, mime_type='image/jpeg'))
+        parts.append(prompt)
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=parts
+        )
+        return jsonify({'analysis': response.text})
+    except Exception as e:
+        return jsonify({'error': f'خطأ في Gemini: {str(e)}'}), 500
+
+
+@app.route('/gemini-watch', methods=['POST'])
+def gemini_watch():
+    """Gemini watches the full video natively via File API — richer movement analysis."""
+    if not gemini_client:
+        return jsonify({'error': 'مفتاح GEMINI_API_KEY غير مضبوط'}), 500
+
+    if 'video' not in request.files:
+        return jsonify({'error': 'لم يتم إرسال فيديو'}), 400
+
+    video_file = request.files['video']
+    skill      = request.form.get('skill', 'تسديدة')
+
+    skill_context = SKILL_CONTEXT.get(skill, '')
+
+    tmp_path = None
+    uploaded = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
+            video_file.save(tmp.name)
+            tmp_path = tmp.name
+
+        # Upload to Gemini File API
+        uploaded = gemini_client.files.upload(
+            path=tmp_path,
+            config=genai_types.UploadFileConfig(mime_type='video/mp4')
+        )
+
+        # Wait for processing (max 90 s)
+        for _ in range(30):
+            if uploaded.state.name != 'PROCESSING':
+                break
+            time.sleep(3)
+            uploaded = gemini_client.files.get(name=uploaded.name)
+
+        if uploaded.state.name == 'FAILED':
+            return jsonify({'error': 'فشل معالجة الفيديو في Gemini'}), 500
+
+        prompt = f"""أنت محلل تقني متخصص في كرة القدم. شاهد الفيديو كاملاً وحلل أداء اللاعب لمهارة: {skill}
+
+السياق التقني: {skill_context}
+
+قدم تحليلاً شاملاً للحركة الكاملة باللغة العربية يشمل:
+
+**1. التقييم العام للحركة الكاملة**
+تقييم عام مع درجة من 10
+
+**2. تحليل كل مرحلة**
+• التحضير: ما هو صحيح وما يحتاج تعديل
+• الملامسة: جودة وضعية اللحظة الحاسمة
+• المتابعة: اكتمال الحركة والتوازن
+
+**3. نقاط القوة ✅**
+أبرز ما يقوم به اللاعب بشكل صحيح
+
+**4. نقاط التحسين ⚠️**
+المراحل التي تحتاج تعديلاً مع وصف دقيق
+
+**5. تمارين مقترحة 🏋️**
+3 تمارين عملية لتحسين تسلسل الحركة
+
+اجعل التحليل واضحاً ومفيداً للاعب أو المدرب."""
+
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=[uploaded, prompt]
+        )
+        return jsonify({'analysis': response.text})
+
+    except Exception as e:
+        return jsonify({'error': f'خطأ في Gemini: {str(e)}'}), 500
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        if uploaded:
+            try:
+                gemini_client.files.delete(name=uploaded.name)
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

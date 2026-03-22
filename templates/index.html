@@ -343,6 +343,50 @@
       margin: 6px 0 20px;
     }
 
+    /* ─── AI PROVIDER TOGGLE ─── */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .provider-btn {
+      background: var(--surface2);
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 12px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.25s ease;
+      color: var(--text);
+    }
+    .provider-btn:hover { border-color: var(--green); background: rgba(0,200,83,0.06); }
+    .provider-btn.active {
+      border-color: var(--green);
+      background: rgba(0,200,83,0.15);
+      box-shadow: 0 0 20px rgba(0,200,83,0.2);
+    }
+    .provider-btn .p-icon { font-size: 1.8rem; margin-bottom: 6px; display: block; }
+    .provider-btn .p-name { font-size: 0.95rem; font-weight: 700; }
+    .provider-btn .p-desc { font-size: 0.72rem; color: var(--text-muted); margin-top: 3px; }
+    .provider-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-top: 5px;
+    }
+    .badge-claude  { background: rgba(255,152,0,0.15); color: #ffb74d; border: 1px solid rgba(255,152,0,0.3); }
+    .badge-gemini  { background: rgba(66,133,244,0.15); color: #90caf9; border: 1px solid rgba(66,133,244,0.3); }
+
+    /* ─── PDF BUTTON ─── */
+    .btn-pdf {
+      background: linear-gradient(135deg, #e53935, #b71c1c);
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(229,57,53,0.35);
+    }
+    .btn-pdf:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(229,57,53,0.45); }
+
     /* ─── VIDEO FULL ANALYSIS BUTTON ─── */
     .btn-video {
       background: linear-gradient(135deg, #7c4dff, #512da8);
@@ -440,11 +484,33 @@
     </div>
   </div>
 
-  <!-- STEP 2: UPLOAD -->
+  <!-- STEP 2: AI PROVIDER -->
+  <div class="card">
+    <div class="card-title">
+      <div class="icon">🤖</div>
+      الخطوة 2 — اختر نموذج الذكاء الاصطناعي
+    </div>
+    <div class="provider-grid">
+      <button class="provider-btn active" data-provider="claude" onclick="selectProvider(this)">
+        <span class="p-icon">🧠</span>
+        <span class="p-name">Claude</span>
+        <span class="p-desc">Anthropic — دقيق ومفصّل</span>
+        <span class="provider-badge badge-claude">Haiku 4.5</span>
+      </button>
+      <button class="provider-btn" data-provider="gemini" onclick="selectProvider(this)">
+        <span class="p-icon">✨</span>
+        <span class="p-name">Gemini</span>
+        <span class="p-desc">Google — يشاهد الفيديو كاملاً</span>
+        <span class="provider-badge badge-gemini">Flash 2.0</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- STEP 3: UPLOAD -->
   <div class="card">
     <div class="card-title">
       <div class="icon">📤</div>
-      الخطوة 2 — ارفع صورة أو فيديو
+      الخطوة 3 — ارفع صورة أو فيديو
     </div>
 
     <div id="drop-zone">
@@ -508,10 +574,15 @@
       <div class="analysis-box" id="analysis-text"></div>
     </div>
 
-    <!-- Retry -->
-    <button class="btn btn-outline btn-full" onclick="resetAll()" style="margin-top:8px;">
-      🔄 تحليل صورة جديدة
-    </button>
+    <!-- Actions -->
+    <div style="display:flex; gap:10px; margin-top:8px; flex-wrap:wrap;">
+      <button class="btn btn-pdf" style="flex:1; justify-content:center;" onclick="exportPDF('results-section', 'تحليل-صورة')">
+        📄 تصدير PDF
+      </button>
+      <button class="btn btn-outline btn-full" style="flex:1;" onclick="resetAll()">
+        🔄 تحليل صورة جديدة
+      </button>
+    </div>
   </div>
 
   <!-- VIDEO FULL ANALYSIS RESULTS -->
@@ -534,9 +605,14 @@
       <div class="analysis-box" id="video-analysis-text"></div>
     </div>
 
-    <button class="btn btn-outline btn-full" onclick="resetAll()">
-      🔄 تحليل فيديو جديد
-    </button>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button class="btn btn-pdf" style="flex:1; justify-content:center;" onclick="exportPDF('video-results-section', 'تحليل-فيديو')">
+        📄 تصدير PDF
+      </button>
+      <button class="btn btn-outline btn-full" style="flex:1;" onclick="resetAll()">
+        🔄 تحليل فيديو جديد
+      </button>
+    </div>
   </div>
 
 </main>
@@ -552,7 +628,8 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  let selectedSkill = 'تسديدة';
+  let selectedSkill    = 'تسديدة';
+  let selectedProvider = 'claude';
   let capturedImageBase64 = null;
   let mediaType = null; // 'image' or 'video'
   let videoEl = null;
@@ -563,6 +640,33 @@
     document.querySelectorAll('.skill-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedSkill = btn.dataset.skill;
+  }
+
+  // ── PROVIDER SELECT ──
+  function selectProvider(btn) {
+    document.querySelectorAll('.provider-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedProvider = btn.dataset.provider;
+  }
+
+  // ── EXPORT PDF ──
+  async function exportPDF(sectionId, filename) {
+    const el = document.getElementById(sectionId);
+    if (!el) return;
+    showToast('جارٍ إنشاء PDF...', '');
+    const opt = {
+      margin:       [8, 8, 8, 8],
+      filename:     filename + '-' + new Date().toLocaleDateString('ar-SA').replace(/\//g, '-') + '.pdf',
+      image:        { type: 'jpeg', quality: 0.92 },
+      html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#0a0f0d' },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+    try {
+      await html2pdf().set(opt).from(el).save();
+      showToast('✅ تم تصدير PDF', 'success');
+    } catch (e) {
+      showToast('❌ تعذّر إنشاء PDF', 'error');
+    }
   }
 
   // ── DRAG & DROP ──
@@ -728,10 +832,12 @@
         return;
       }
 
-      updateLoading('🤖 جارٍ تحليل النتائج بالذكاء الاصطناعي...', 'Claude يرى الصورة ويحلل الزوايا');
+      const aiLabel = selectedProvider === 'gemini' ? 'Gemini' : 'Claude';
+      updateLoading(`🤖 جارٍ تحليل النتائج بـ ${aiLabel}...`, `${aiLabel} يرى الصورة ويحلل الزوايا`);
 
-      // Step 2: Claude Analysis (مع الصورة لتحليل بصري أدق)
-      const claudeRes = await fetch('/claude', {
+      // Step 2: AI Analysis
+      const aiEndpoint = selectedProvider === 'gemini' ? '/gemini' : '/claude';
+      const claudeRes = await fetch(aiEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ angles: analyzeData.angles, skill: selectedSkill, image: imageBase64 })
@@ -798,6 +904,28 @@
   async function analyzeFullVideo() {
     if (!currentVideoFile) { showToast('لا يوجد فيديو محدد', 'error'); return; }
 
+    if (selectedProvider === 'gemini') {
+      // ── Gemini: watches the full video natively ──
+      showLoading('✨ Gemini يشاهد الفيديو كاملاً...', 'يتم رفع الفيديو إلى Gemini File API');
+      const formData = new FormData();
+      formData.append('video', currentVideoFile);
+      formData.append('skill', selectedSkill);
+      try {
+        const res  = await fetch('/gemini-watch', { method: 'POST', body: formData });
+        const data = await res.json();
+        hideLoading();
+        if (data.error) { showToast('⚠️ ' + data.error, 'error'); return; }
+        // Show analysis without phase cards (Gemini describes everything in text)
+        showGeminiVideoResult(data.analysis);
+        showToast('✅ تم تحليل الفيديو بـ Gemini!', 'success');
+      } catch (err) {
+        hideLoading();
+        showToast('❌ خطأ في الاتصال: ' + err.message, 'error');
+      }
+      return;
+    }
+
+    // ── Claude: extract 3 phases then analyze ──
     showLoading('🎬 جارٍ تحليل الفيديو...', 'يتم اكتشاف لحظة الملامسة وتحليل الوضعية');
 
     const formData = new FormData();
@@ -813,12 +941,12 @@
         return;
       }
 
-      updateLoading('🤖 جارٍ تحليل النتائج بالذكاء الاصطناعي...', 'Claude يحلل وضعية اللاعب');
+      updateLoading('🤖 جارٍ تحليل الحركة الكاملة بـ Claude...', 'Claude يحلل المراحل الثلاث');
 
-      const claudeRes = await fetch('/claude', {
+      const claudeRes = await fetch('/claude-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ angles: data.angles, skill: selectedSkill, image: data.thumbnail })
+        body: JSON.stringify({ phases: data.phases, skill: selectedSkill })
       });
       const claudeData = await claudeRes.json();
 
@@ -829,13 +957,32 @@
         return;
       }
 
-      showResults(data.angles, claudeData.analysis);
+      showVideoResults(data.phases, claudeData.analysis);
       showToast('✅ تم تحليل الفيديو!', 'success');
 
     } catch (err) {
       hideLoading();
       showToast('❌ خطأ في الاتصال: ' + err.message, 'error');
     }
+  }
+
+  // ── SHOW GEMINI VIDEO RESULT (no phase cards — Gemini describes everything) ──
+  function showGeminiVideoResult(analysis) {
+    const formatted = analysis
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/^### (.+)$/gm, '<h3 style="color:var(--accent);margin:12px 0 6px;">$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2 style="color:var(--green-light);margin:14px 0 6px;font-size:1rem;">$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1 style="color:var(--green-light);margin:14px 0 8px;font-size:1.1rem;">$1</h1>')
+      .replace(/\n/g, '<br>');
+
+    // Reuse video-results-section but hide phases-grid
+    document.getElementById('phases-grid').innerHTML =
+      '<p style="color:var(--text-muted);font-size:0.85rem;padding:8px 0;">✨ Gemini شاهد الفيديو كاملاً — التحليل النصي أدناه</p>';
+    document.getElementById('video-analysis-text').innerHTML = formatted;
+    const sec = document.getElementById('video-results-section');
+    sec.style.display = 'flex';
+    sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // ── SHOW VIDEO RESULTS ──
@@ -896,6 +1043,7 @@
   }
 
   function resetAll() {
+    document.getElementById('btn-analyze-frame').style.display = 'inline-flex';
     resetResults();
     capturedImageBase64 = null;
     mediaType = null;
@@ -938,5 +1086,6 @@
     toastTimer = setTimeout(() => { t.className = 'toast'; }, 4000);
   }
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </body>
 </html>
